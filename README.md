@@ -1,0 +1,2 @@
+# CriptoApiSingal
+señales de criptos
