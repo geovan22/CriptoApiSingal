@@ -8,7 +8,7 @@ from data_fetch import get_klines
 from indicators import add_all_indicators
 from signals import evaluate_signal
 from telegram_alert import send_telegram_message
-from telegram_bot import get_updates, parse_commands, format_status_message
+from telegram_bot import get_updates, parse_commands, format_status_message, format_help_message
 
 st.set_page_config(page_title="Crypto Signal Dashboard", layout="wide")
 st_autorefresh(interval=config.REFRESH_SECONDS * 1000, key="refresh")
@@ -51,6 +51,9 @@ if TOKEN and CHAT_ID:
         elif cmd == "stop":
             st.session_state.notifications_enabled = False
             send_telegram_message(TOKEN, CHAT_ID, "🔴 Alertas pausadas. El dashboard sigue vigilando el mercado, pero no te va a interrumpir.")
+
+        elif cmd == "help":
+            send_telegram_message(TOKEN, CHAT_ID, format_help_message())
 
         elif cmd == "symbol" and arg:
             symbol = arg if arg.endswith("USDT") else f"{arg}USDT"

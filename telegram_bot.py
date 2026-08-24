@@ -7,6 +7,7 @@ del dashboard. Comandos soportados:
   /status          -> resumen corto: activo/pausado, cripto y señal actual
   /now             -> análisis completo al momento (igual al panel del dashboard)
   /symbol BTCUSDT  -> cambia la cripto que se está siguiendo
+  /help            -> muestra la lista de comandos
 """
 import requests
 
@@ -64,3 +65,27 @@ def format_status_message(symbol: str, notifications_enabled: bool, result: dict
     if result["signal"] in ("COMPRA", "VENTA"):
         lines.append(f"Entrada: ${result['entry']:,.2f} | Stop: ${result['stop']:,.2f} | TP: ${result['tp']:,.2f}")
     return "\n".join(lines)
+
+
+def format_help_message() -> str:
+    return (
+        "*Comandos disponibles*\n\n"
+        "🟢 /start\n"
+        "Activa las alertas push. Cuando el dashboard detecte una señal de "
+        "COMPRA o VENTA, te llega el aviso aquí con entrada, stop y take profit.\n\n"
+        "🔴 /stop\n"
+        "Pausa las alertas. El dashboard sigue vigilando el mercado igual, "
+        "solo deja de mandarte mensajes hasta que uses /start de nuevo.\n\n"
+        "ℹ️ /status\n"
+        "Resumen corto: si las alertas están activas o pausadas, qué cripto "
+        "estás siguiendo y cuál es la señal actual (COMPRA/VENTA/ESPERA).\n\n"
+        "🔍 /now\n"
+        "Igual que /status pero con el detalle completo del análisis al momento "
+        "(MACD, RSI, PVT, delta, soporte/resistencia) -- úsalo cuando quieras ver "
+        "cómo está el mercado ahora mismo sin abrir el dashboard.\n\n"
+        "🔄 /symbol PAR\n"
+        "Cambia la cripto en seguimiento. El PAR va en formato Binance.\n"
+        "Ejemplo: `/symbol ETHUSDT` o `/symbol SOL` (el USDT se agrega solo si lo omites).\n\n"
+        "❓ /help\n"
+        "Muestra este mensaje."
+    )
