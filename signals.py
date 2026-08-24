@@ -1,22 +1,38 @@
 """
 Lógica de señal replicando el marco usado manualmente en el análisis:
-- Cruce de MACD (alcista/bajista)
-- Zona de RSI (sobrecompra/sobreventa/neutral)
-- Confirmación de PVT (¿el volumen ponderado confirma el movimiento del precio?)
-- Delta aproximado (compras vs ventas a mercado dentro de cada vela)
-- Proximidad a soporte/resistencia (swing highs/lows recientes)
+- Cruce de MACD (alcista/bajista)               -- peso 1  (derivado del precio)
+- Zona de RSI (sobrecompra/sobreventa/neutral)   -- peso 1  (derivado del precio)
+- Confirmación de PVT (volumen ponderado)        -- peso 1.5 (volumen real)
+- Delta aproximado (compras vs ventas a mercado) -- peso 1.5 (volumen real)
+- Proximidad a soporte/resistencia               -- peso 1
+- Tendencia diaria (1D) como contexto            -- peso 0.5 (informativo)
 
-IMPORTANTE: la señal se calcula usando solo velas YA CERRADAS. La última vela
-del gráfico está en formación y sus valores cambian en vivo -- evaluarla
-directamente causa señales que aparecen y desaparecen en minutos. Por eso
-aquí se descarta si close_time todavía no pasó.
+Los pesos reflejan la jerarquía de tu guía de trading profesional: el
+volumen/order flow (PVT, delta) pesa más que los indicadores derivados
+solo del precio (MACD, RSI), que la guía trata con más escepticismo.
 
-Una señal solo se marca como "confirmada" cuando varias condiciones coinciden
-(confluencia). Esto es apoyo a la decisión, no garantía de resultado.
+IMPORTANTE:
+1) La señal se calcula usando solo velas YA CERRADAS. La última vela del
+   gráfico está en formación y sus valores cambian en vivo -- evaluarla
+   directamente causa señales que aparecen y desaparecen en minutos.
+2) Confirmación de 2 velas: una señal solo se marca "confirmada" si se
+   sostiene en las dos últimas velas cerradas (no solo en la más reciente).
+   Si aparece por primera vez, queda como "en formación" y no dispara
+   alerta -- reduce falsas señales de una sola vela.
+3) Las razones se separan en "a favor" y "en conflicto" para no mezclar
+   señales que apoyan la decisión con las que la contradicen.
 """
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone
+
+WEIGHTS = {
+    "macd": 1.0,
+    "rsi": 1.0,
+    "pvt": 1.5,
+    "delta": 1.5,
+    "level": 1.0,
+    "trend_1d": 0.5,
+}
 
 
 def only_closed_candles(df: pd.DataFrame) -> pd.DataFrame:
@@ -50,20 +66,27 @@ def nearest_level(price: float, levels: list, above: bool):
     return min(candidates) if above else max(candidates)
 
 
-def evaluate_signal(df_full: pd.DataFrame) -> dict:
+def get_daily_trend(df_1d: pd.DataFrame) -> str:
     """
-    df_full: DataFrame con indicadores ya calculados (incluye la vela en curso).
-    Devuelve un diccionario con el diagnóstico completo, calculado SOLO con
-    velas cerradas para evitar señales que parpadean.
+    Tendencia de contexto usando velas diarias: precio de cierre vs EMA 50.
+    Se usa como filtro informativo, no como condición obligatoria.
     """
-    live_price = df_full.iloc[-1]["close"]
-    df = only_closed_candles(df_full)
+    df = only_closed_candles(df_1d)
+    last = df.iloc[-1]
+    if pd.isna(last.get("ema50")):
+        return "indeterminada"
+    return "alcista" if last["close"] > last["ema50"] else "bajista"
 
+
+def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
+    """
+    Calcula el puntaje de confluencia y las razones para la ÚLTIMA vela
+    cerrada de df (df ya debe venir filtrado con only_closed_candles).
+    Devuelve (signal, buy_score, sell_score, buy_reasons, sell_reasons, extras)
+    """
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    macd_bullish_cross = prev["macd"] <= prev["macd_signal"] and last["macd"] > last["macd_signal"]
-    macd_bearish_cross = prev["macd"] >= prev["macd_signal"] and last["macd"] < last["macd_signal"]
     macd_state = "alcista" if last["macd"] > last["macd_signal"] else "bajista"
 
     rsi_val = last["rsi14"]
@@ -87,7 +110,6 @@ def evaluate_signal(df_full: pd.DataFrame) -> dict:
     else:
         pvt_confirm = "plano"
 
-    # --- Delta aproximado (buy vs sell volume real de las últimas velas cerradas) ---
     delta_sum = df["delta"].tail(3).sum()
     delta_pct = delta_sum / df["volume"].tail(3).sum() if df["volume"].tail(3).sum() else 0
     if delta_pct > 0.08:
@@ -102,50 +124,64 @@ def evaluate_signal(df_full: pd.DataFrame) -> dict:
     near_support = nearest_level(price, supports, above=False)
     near_resistance = nearest_level(price, resistances, above=True)
 
-    buy_score = 0
-    sell_score = 0
-    reasons = []
+    buy_score = 0.0
+    sell_score = 0.0
+    buy_reasons = []
+    sell_reasons = []
 
+    # MACD (peso 1)
     if macd_state == "alcista":
-        buy_score += 1
-        reasons.append("MACD en fase alcista")
+        buy_score += WEIGHTS["macd"]
+        buy_reasons.append("MACD en fase alcista")
     else:
-        sell_score += 1
-        reasons.append("MACD en fase bajista")
+        sell_score += WEIGHTS["macd"]
+        sell_reasons.append("MACD en fase bajista")
 
+    # RSI (peso 1)
     if rsi_zone == "sobreventa":
-        buy_score += 1
-        reasons.append("RSI en sobreventa (<30)")
+        buy_score += WEIGHTS["rsi"]
+        buy_reasons.append("RSI en sobreventa (<30)")
     elif rsi_zone == "sobrecompra":
-        sell_score += 1
-        reasons.append("RSI en sobrecompra (>70)")
+        sell_score += WEIGHTS["rsi"]
+        sell_reasons.append("RSI en sobrecompra (>70)")
 
+    # PVT (peso 1.5 -- volumen real, pesa más que MACD/RSI)
     if "confirma alcista" in pvt_confirm:
-        buy_score += 1
-        reasons.append("PVT confirma presión compradora")
+        buy_score += WEIGHTS["pvt"]
+        buy_reasons.append("PVT confirma presión compradora")
     elif "confirma bajista" in pvt_confirm:
-        sell_score += 1
-        reasons.append("PVT confirma presión vendedora")
+        sell_score += WEIGHTS["pvt"]
+        sell_reasons.append("PVT confirma presión vendedora")
     elif "diverge" in pvt_confirm and price_slope > 0:
-        sell_score += 0.5
-        reasons.append("Divergencia bajista PVT/precio")
+        sell_score += WEIGHTS["pvt"] * 0.5
+        sell_reasons.append("Divergencia bajista PVT/precio")
     elif "diverge" in pvt_confirm and price_slope < 0:
-        buy_score += 0.5
-        reasons.append("Divergencia alcista PVT/precio")
+        buy_score += WEIGHTS["pvt"] * 0.5
+        buy_reasons.append("Divergencia alcista PVT/precio")
 
+    # Delta (peso 1.5 -- volumen real)
     if "comprador" in delta_state:
-        buy_score += 1
-        reasons.append("Delta comprador en últimas velas cerradas")
+        buy_score += WEIGHTS["delta"]
+        buy_reasons.append("Delta comprador en últimas velas cerradas")
     elif "vendedor" in delta_state:
-        sell_score += 1
-        reasons.append("Delta vendedor en últimas velas cerradas")
+        sell_score += WEIGHTS["delta"]
+        sell_reasons.append("Delta vendedor en últimas velas cerradas")
 
+    # Soporte/Resistencia (peso 1)
     if near_support and abs(price - near_support) / price < 0.006:
-        buy_score += 1
-        reasons.append(f"Precio cerca de soporte {near_support}")
+        buy_score += WEIGHTS["level"]
+        buy_reasons.append(f"Precio cerca de soporte {near_support}")
     if near_resistance and abs(near_resistance - price) / price < 0.006:
-        sell_score += 1
-        reasons.append(f"Precio cerca de resistencia {near_resistance}")
+        sell_score += WEIGHTS["level"]
+        sell_reasons.append(f"Precio cerca de resistencia {near_resistance}")
+
+    # Tendencia diaria (peso 0.5 -- contexto, no obligatorio)
+    if trend_1d == "alcista":
+        buy_score += WEIGHTS["trend_1d"]
+        buy_reasons.append("Tendencia diaria (1D) alcista")
+    elif trend_1d == "bajista":
+        sell_score += WEIGHTS["trend_1d"]
+        sell_reasons.append("Tendencia diaria (1D) bajista")
 
     if buy_score >= 3 and buy_score > sell_score:
         signal = "COMPRA"
@@ -153,6 +189,54 @@ def evaluate_signal(df_full: pd.DataFrame) -> dict:
         signal = "VENTA"
     else:
         signal = "ESPERA"
+
+    extras = {
+        "price": price,
+        "macd_state": macd_state,
+        "rsi": round(rsi_val, 2),
+        "rsi_zone": rsi_zone,
+        "pvt_confirm": pvt_confirm,
+        "delta_state": delta_state,
+        "delta_pct": round(delta_pct * 100, 1),
+        "support": near_support,
+        "resistance": near_resistance,
+    }
+    return signal, buy_score, sell_score, buy_reasons, sell_reasons, extras
+
+
+def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
+    """
+    df_full: DataFrame con indicadores ya calculados (incluye la vela en curso).
+    trend_1d: 'alcista' | 'bajista' | None -- contexto opcional del timeframe diario.
+
+    Devuelve un diccionario con el diagnóstico completo. La señal solo se
+    marca como "status": "confirmada" si se sostiene en las últimas 2 velas
+    cerradas; si es la primera vez que aparece, queda "en formación" y no
+    debería disparar una alerta todavía.
+    """
+    live_price = df_full.iloc[-1]["close"]
+    df = only_closed_candles(df_full)
+
+    signal, buy_score, sell_score, buy_reasons, sell_reasons, extras = _score_last_closed(df, trend_1d)
+
+    # Confirmación de 2 velas: repetir el cálculo excluyendo la última vela cerrada
+    prev_signal = "ESPERA"
+    if len(df) > 60:  # margen para que find_swing_levels tenga suficiente historia
+        prev_signal, *_ = _score_last_closed(df.iloc[:-1], trend_1d)
+
+    if signal in ("COMPRA", "VENTA") and signal == prev_signal:
+        status = "confirmada"
+    elif signal in ("COMPRA", "VENTA"):
+        status = "en formación"
+    else:
+        status = "n/a"
+
+    reasons = buy_reasons if signal == "COMPRA" else sell_reasons if signal == "VENTA" else []
+    conflict_reasons = sell_reasons if signal == "COMPRA" else buy_reasons if signal == "VENTA" else []
+
+    price = extras["price"]
+    near_support = extras["support"]
+    near_resistance = extras["resistance"]
 
     entry = stop = tp = None
     if signal == "COMPRA":
@@ -166,22 +250,23 @@ def evaluate_signal(df_full: pd.DataFrame) -> dict:
 
     return {
         "signal": signal,
+        "status": status,
         "price": price,
         "live_price": live_price,
-        "candle_time": last["open_time"],
-        "macd_state": macd_state,
-        "macd_bullish_cross": macd_bullish_cross,
-        "macd_bearish_cross": macd_bearish_cross,
-        "rsi": round(rsi_val, 2),
-        "rsi_zone": rsi_zone,
-        "pvt_confirm": pvt_confirm,
-        "delta_state": delta_state,
-        "delta_pct": round(delta_pct * 100, 1),
+        "candle_time": df.iloc[-1]["open_time"],
+        "macd_state": extras["macd_state"],
+        "rsi": extras["rsi"],
+        "rsi_zone": extras["rsi_zone"],
+        "pvt_confirm": extras["pvt_confirm"],
+        "delta_state": extras["delta_state"],
+        "delta_pct": extras["delta_pct"],
+        "trend_1d": trend_1d,
         "support": near_support,
         "resistance": near_resistance,
-        "buy_score": buy_score,
-        "sell_score": sell_score,
+        "buy_score": round(buy_score, 2),
+        "sell_score": round(sell_score, 2),
         "reasons": reasons,
+        "conflict_reasons": conflict_reasons,
         "entry": entry,
         "stop": stop,
         "tp": tp,

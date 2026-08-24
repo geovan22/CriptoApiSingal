@@ -53,17 +53,24 @@ def parse_commands(updates: list, expected_chat_id: str):
 def format_status_message(symbol: str, notifications_enabled: bool, result: dict) -> str:
     estado = "🟢 Activas" if notifications_enabled else "🔴 Pausadas"
     signal_emoji = {"COMPRA": "🟢", "VENTA": "🔴", "ESPERA": "🟡"}[result["signal"]]
+    status_tag = ""
+    if result["signal"] in ("COMPRA", "VENTA"):
+        status_tag = " (confirmada)" if result.get("status") == "confirmada" else " (en formación)"
     lines = [
         f"*Estado de alertas:* {estado}",
         f"*Cripto en seguimiento:* {symbol}",
         f"*Precio:* ${result['price']:,.2f}",
-        f"{signal_emoji} *Señal:* {result['signal']}",
+        f"{signal_emoji} *Señal:* {result['signal']}{status_tag}",
         f"MACD: {result['macd_state']} | RSI: {result['rsi']} ({result['rsi_zone']})",
         f"PVT: {result['pvt_confirm']}",
         f"Delta: {result['delta_state']} ({result['delta_pct']}%)",
     ]
+    if result.get("trend_1d"):
+        lines.append(f"Tendencia 1D: {result['trend_1d']}")
     if result["signal"] in ("COMPRA", "VENTA"):
         lines.append(f"Entrada: ${result['entry']:,.2f} | Stop: ${result['stop']:,.2f} | TP: ${result['tp']:,.2f}")
+        if result.get("conflict_reasons"):
+            lines.append(f"⚠️ En conflicto: {', '.join(result['conflict_reasons'])}")
     return "\n".join(lines)
 
 

@@ -6,7 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 import config
 from data_fetch import get_klines
 from indicators import add_all_indicators
-from signals import evaluate_signal
+from signals import evaluate_signal, get_daily_trend
 from telegram_alert import send_telegram_message
 from telegram_bot import get_updates, parse_commands, format_status_message, format_help_message
 
@@ -30,7 +30,13 @@ CHAT_ID = config.TELEGRAM_CHAT_ID
 def get_data_and_signal(symbol: str):
     df = get_klines(symbol, config.INTERVAL, limit=300)
     df = add_all_indicators(df)
-    result = evaluate_signal(df)
+    try:
+        df_1d = get_klines(symbol, "1d", limit=100)
+        df_1d = add_all_indicators(df_1d)
+        trend_1d = get_daily_trend(df_1d)
+    except Exception:
+        trend_1d = None
+    result = evaluate_signal(df, trend_1d=trend_1d)
     return df, result
 
 
@@ -145,20 +151,31 @@ with col2:
 
     signal = result["signal"]
     color = {"COMPRA": "🟢", "VENTA": "🔴", "ESPERA": "🟡"}[signal]
-    st.subheader(f"{color} {signal}")
+    status_tag = ""
+    if signal in ("COMPRA", "VENTA"):
+        status_tag = " ✅ confirmada" if result["status"] == "confirmada" else " ⏳ en formación"
+    st.subheader(f"{color} {signal}{status_tag}")
+    if signal in ("COMPRA", "VENTA") and result["status"] == "en formación":
+        st.caption("Apareció en la última vela cerrada. Se confirma si se sostiene en la próxima.")
 
     st.write(f"**MACD:** {result['macd_state']}")
     st.write(f"**RSI 14:** {result['rsi']} ({result['rsi_zone']})")
     st.write(f"**PVT:** {result['pvt_confirm']}")
     st.write(f"**Delta:** {result['delta_state']} ({result['delta_pct']}%)")
+    if result.get("trend_1d"):
+        st.write(f"**Tendencia 1D:** {result['trend_1d']}")
     if result["support"]:
         st.write(f"**Soporte cercano:** {result['support']:,.2f}")
     if result["resistance"]:
         st.write(f"**Resistencia cercana:** {result['resistance']:,.2f}")
 
-    st.markdown("**Razones:**")
+    st.markdown("**Razones a favor:**")
     for r in result["reasons"]:
         st.write(f"- {r}")
+    if result.get("conflict_reasons"):
+        st.markdown("**⚠️ Señales en conflicto (contradicen esta señal):**")
+        for r in result["conflict_reasons"]:
+            st.write(f"- {r}")
 
     alert_key = f"{symbol}:{signal}"
     if signal in ("COMPRA", "VENTA"):
@@ -167,14 +184,59 @@ with col2:
             f"Stop loss: ${result['stop']:,.2f}\n\n"
             f"Take profit: ${result['tp']:,.2f}"
         )
-        if st.session_state.last_alert != alert_key and st.session_state.notifications_enabled and TOKEN and CHAT_ID:
+
+        st.markdown("**Calculadora de ganancia/pérdida**")
+        cap_col, inv_col = st.columns(2)
+        with cap_col:
+            capital = st.number_input("Capital disponible ($)", min_value=1.0, value=50.0, step=10.0, key="capital_input")
+        with inv_col:
+            investment = st.number_input("Monto a invertir ($)", min_value=1.0, value=500.0, step=50.0, key="investment_input")
+
+        entry, stop, tp = result["entry"], result["stop"], result["tp"]
+        qty = investment / entry  # cantidad de la cripto que representa ese monto invertido
+
+        if signal == "COMPRA":
+            profit_usd = qty * (tp - entry)
+            loss_usd = qty * (entry - stop)
+        else:  # VENTA
+            profit_usd = qty * (entry - tp)
+            loss_usd = qty * (stop - entry)
+
+        profit_pct = (profit_usd / investment) * 100 if investment else 0
+        loss_pct = (loss_usd / investment) * 100 if investment else 0
+        implied_leverage = investment / capital if capital else 0
+        rr_ratio = (profit_usd / loss_usd) if loss_usd else 0
+
+        pnl_col1, pnl_col2 = st.columns(2)
+        with pnl_col1:
+            st.metric("Si toca Take Profit", f"+${profit_usd:,.2f}", f"{profit_pct:+.1f}%")
+        with pnl_col2:
+            st.metric("Si toca Stop Loss", f"-${loss_usd:,.2f}", f"{-loss_pct:.1f}%", delta_color="inverse")
+
+        st.caption(f"Cantidad: {qty:.6f} {symbol.replace('USDT','')} · Ratio riesgo/beneficio: 1:{rr_ratio:.2f}")
+
+        if implied_leverage > 1:
+            st.warning(
+                f"⚠️ Este monto implica un apalancamiento aproximado de **{implied_leverage:.1f}x** "
+                f"sobre tu capital de ${capital:,.2f}. A mayor apalancamiento, mayor es también "
+                f"el riesgo de que una pérdida consuma tu margen antes de llegar al stop loss "
+                f"planeado (liquidación). Verifica siempre el apalancamiento real que usa tu bróker."
+            )
+
+        if (
+            result["status"] == "confirmada"
+            and st.session_state.last_alert != alert_key
+            and st.session_state.notifications_enabled
+            and TOKEN and CHAT_ID
+        ):
             msg = (
-                f"*{signal}* señal en *{symbol}* ({config.INTERVAL})\n"
+                f"*{signal}* señal CONFIRMADA en *{symbol}* ({config.INTERVAL})\n"
                 f"Precio: ${result['price']:,.2f}\n"
                 f"Entrada: ${result['entry']:,.2f}\n"
                 f"Stop: ${result['stop']:,.2f}\n"
                 f"TP: ${result['tp']:,.2f}\n"
-                f"Razones: {', '.join(result['reasons'])}"
+                f"A favor: {', '.join(result['reasons'])}\n"
+                + (f"En conflicto: {', '.join(result['conflict_reasons'])}" if result['conflict_reasons'] else "")
             )
             ok, info = send_telegram_message(TOKEN, CHAT_ID, msg)
             if ok:
