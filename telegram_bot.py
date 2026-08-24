@@ -69,6 +69,8 @@ def format_status_message(symbol: str, notifications_enabled: bool, result: dict
         lines.append(f"Tendencia 1D: {result['trend_1d']}")
     if result["signal"] in ("COMPRA", "VENTA"):
         lines.append(f"Entrada: ${result['entry']:,.2f} | Stop: ${result['stop']:,.2f} | TP: ${result['tp']:,.2f}")
+        if result.get("reasons"):
+            lines.append(f"✅ A favor: {', '.join(result['reasons'])}")
         if result.get("conflict_reasons"):
             lines.append(f"⚠️ En conflicto: {', '.join(result['conflict_reasons'])}")
     return "\n".join(lines)
