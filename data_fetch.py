@@ -34,11 +34,18 @@ def get_klines(symbol: str = "BTCUSDT", interval: str = "4h", limit: int = 300) 
             resp.raise_for_status()
             data = resp.json()
             df = pd.DataFrame(data, columns=COLUMNS)
-            for col in ["open", "high", "low", "close", "volume"]:
+            for col in ["open", "high", "low", "close", "volume", "taker_buy_base"]:
                 df[col] = df[col].astype(float)
             df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
             df["close_time"] = pd.to_datetime(df["close_time"], unit="ms")
-            return df[["open_time", "open", "high", "low", "close", "volume", "close_time"]]
+            # Aproximación de delta: volumen comprador (taker buy) vs vendedor
+            df["buy_vol"] = df["taker_buy_base"]
+            df["sell_vol"] = df["volume"] - df["taker_buy_base"]
+            df["delta"] = df["buy_vol"] - df["sell_vol"]
+            return df[[
+                "open_time", "open", "high", "low", "close", "volume",
+                "close_time", "buy_vol", "sell_vol", "delta",
+            ]]
         except Exception as e:
             last_err = e
             continue

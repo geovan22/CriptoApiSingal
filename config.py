@@ -28,8 +28,13 @@ try:
 except Exception:
     pass
 
-# Pares a monitorear (formato Binance, sin barra)
-SYMBOLS = ["BTCUSDT"]
+# Cripto que se sigue por defecto al abrir la app (cambiable después desde
+# la web o con /symbol en Telegram, sin necesidad de tocar este archivo)
+DEFAULT_SYMBOL = "BTCUSDT"
+
+# Opciones sugeridas en el selector de la web (puedes escribir cualquier
+# otro par de Binance manualmente, no está limitado a esta lista)
+AVAILABLE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BCHUSDT"]
 
 # Temporalidad (4h: buen balance entre calidad de señal y ruido,
 # consistente con el análisis manual que ya veníamos haciendo en el chat)

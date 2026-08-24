@@ -3,15 +3,28 @@ Lógica de señal replicando el marco usado manualmente en el análisis:
 - Cruce de MACD (alcista/bajista)
 - Zona de RSI (sobrecompra/sobreventa/neutral)
 - Confirmación de PVT (¿el volumen ponderado confirma el movimiento del precio?)
+- Delta aproximado (compras vs ventas a mercado dentro de cada vela)
 - Proximidad a soporte/resistencia (swing highs/lows recientes)
 
+IMPORTANTE: la señal se calcula usando solo velas YA CERRADAS. La última vela
+del gráfico está en formación y sus valores cambian en vivo -- evaluarla
+directamente causa señales que aparecen y desaparecen en minutos. Por eso
+aquí se descarta si close_time todavía no pasó.
+
 Una señal solo se marca como "confirmada" cuando varias condiciones coinciden
-(confluencia), igual que hicimos capturas a capturas en el chat. Esto es
-apoyo a la decisión, no garantía de resultado -- siempre defina su propio
-stop y tamaño de posición.
+(confluencia). Esto es apoyo a la decisión, no garantía de resultado.
 """
 import pandas as pd
 import numpy as np
+from datetime import datetime, timezone
+
+
+def only_closed_candles(df: pd.DataFrame) -> pd.DataFrame:
+    """Descarta la última vela si todavía está en formación."""
+    now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+    if df.iloc[-1]["close_time"] > now:
+        return df.iloc[:-1].copy()
+    return df
 
 
 def find_swing_levels(df: pd.DataFrame, lookback: int = 60, order: int = 3):
@@ -37,11 +50,15 @@ def nearest_level(price: float, levels: list, above: bool):
     return min(candidates) if above else max(candidates)
 
 
-def evaluate_signal(df: pd.DataFrame) -> dict:
+def evaluate_signal(df_full: pd.DataFrame) -> dict:
     """
-    Devuelve un diccionario con el diagnóstico completo:
-    señal ('COMPRA','VENTA','ESPERA'), razones, y niveles sugeridos.
+    df_full: DataFrame con indicadores ya calculados (incluye la vela en curso).
+    Devuelve un diccionario con el diagnóstico completo, calculado SOLO con
+    velas cerradas para evitar señales que parpadean.
     """
+    live_price = df_full.iloc[-1]["close"]
+    df = only_closed_candles(df_full)
+
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -57,7 +74,6 @@ def evaluate_signal(df: pd.DataFrame) -> dict:
     else:
         rsi_zone = "neutral"
 
-    # PVT: comparar pendiente reciente (10 velas) vs precio
     pvt_slope = df["pvt"].tail(10).diff().mean()
     price_slope = df["close"].tail(10).diff().mean()
     if pvt_slope > 0 and price_slope > 0:
@@ -71,12 +87,21 @@ def evaluate_signal(df: pd.DataFrame) -> dict:
     else:
         pvt_confirm = "plano"
 
+    # --- Delta aproximado (buy vs sell volume real de las últimas velas cerradas) ---
+    delta_sum = df["delta"].tail(3).sum()
+    delta_pct = delta_sum / df["volume"].tail(3).sum() if df["volume"].tail(3).sum() else 0
+    if delta_pct > 0.08:
+        delta_state = "comprador (delta positivo)"
+    elif delta_pct < -0.08:
+        delta_state = "vendedor (delta negativo)"
+    else:
+        delta_state = "equilibrado"
+
     supports, resistances = find_swing_levels(df)
     price = last["close"]
     near_support = nearest_level(price, supports, above=False)
     near_resistance = nearest_level(price, resistances, above=True)
 
-    # --- Lógica de confluencia (igual que en el análisis manual) ---
     buy_score = 0
     sell_score = 0
     reasons = []
@@ -108,7 +133,13 @@ def evaluate_signal(df: pd.DataFrame) -> dict:
         buy_score += 0.5
         reasons.append("Divergencia alcista PVT/precio")
 
-    # Proximidad a soporte/resistencia (dentro de 0.6%)
+    if "comprador" in delta_state:
+        buy_score += 1
+        reasons.append("Delta comprador en últimas velas cerradas")
+    elif "vendedor" in delta_state:
+        sell_score += 1
+        reasons.append("Delta vendedor en últimas velas cerradas")
+
     if near_support and abs(price - near_support) / price < 0.006:
         buy_score += 1
         reasons.append(f"Precio cerca de soporte {near_support}")
@@ -136,12 +167,16 @@ def evaluate_signal(df: pd.DataFrame) -> dict:
     return {
         "signal": signal,
         "price": price,
+        "live_price": live_price,
+        "candle_time": last["open_time"],
         "macd_state": macd_state,
         "macd_bullish_cross": macd_bullish_cross,
         "macd_bearish_cross": macd_bearish_cross,
         "rsi": round(rsi_val, 2),
         "rsi_zone": rsi_zone,
         "pvt_confirm": pvt_confirm,
+        "delta_state": delta_state,
+        "delta_pct": round(delta_pct * 100, 1),
         "support": near_support,
         "resistance": near_resistance,
         "buy_score": buy_score,
