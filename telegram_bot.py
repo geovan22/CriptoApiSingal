@@ -7,9 +7,9 @@ del dashboard. Comandos soportados:
   /status          -> resumen corto: activo/pausado, cripto y señal actual
   /now             -> análisis completo al momento (igual al panel del dashboard)
   /symbol BTCUSDT  -> cambia la cripto que se está siguiendo
-  /help            -> muestra la lista de comandos
 """
 import requests
+from price_format import format_price
 
 
 def get_updates(token: str, offset: int = 0, timeout: int = 5):
@@ -59,7 +59,7 @@ def format_status_message(symbol: str, notifications_enabled: bool, result: dict
     lines = [
         f"*Estado de alertas:* {estado}",
         f"*Cripto en seguimiento:* {symbol}",
-        f"*Precio:* ${result['price']:,.2f}",
+        f"*Precio:* ${format_price(result['price'])}",
         f"{signal_emoji} *Señal:* {result['signal']}{status_tag}",
         f"MACD: {result['macd_state']} | RSI: {result['rsi']} ({result['rsi_zone']})",
         f"PVT: {result['pvt_confirm']}",
@@ -68,7 +68,7 @@ def format_status_message(symbol: str, notifications_enabled: bool, result: dict
     if result.get("trend_1d"):
         lines.append(f"Tendencia 1D: {result['trend_1d']}")
     if result["signal"] in ("COMPRA", "VENTA"):
-        lines.append(f"Entrada: ${result['entry']:,.2f} | Stop: ${result['stop']:,.2f} | TP: ${result['tp']:,.2f}")
+        lines.append(f"Entrada: ${format_price(result['entry'])} | Stop: ${format_price(result['stop'])} | TP: ${format_price(result['tp'])}")
         if result.get("reasons"):
             lines.append(f"✅ A favor: {', '.join(result['reasons'])}")
         if result.get("conflict_reasons"):

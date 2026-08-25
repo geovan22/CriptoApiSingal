@@ -6,6 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 import config
 import db
 import backtest
+from price_format import format_price
 from data_fetch import get_klines
 from indicators import add_all_indicators
 from signals import evaluate_signal, get_daily_trend
@@ -69,10 +70,10 @@ def set_symbol(new_symbol: str):
 def send_signal_alert(symbol, result):
     msg = (
         f"*{result['signal']}* señal CONFIRMADA en *{symbol}* ({config.INTERVAL})\n"
-        f"Precio: ${result['price']:,.2f}\n"
-        f"Entrada: ${result['entry']:,.2f}\n"
-        f"Stop: ${result['stop']:,.2f}\n"
-        f"TP: ${result['tp']:,.2f}\n"
+        f"Precio: ${format_price(result['price'])}\n"
+        f"Entrada: ${format_price(result['entry'])}\n"
+        f"Stop: ${format_price(result['stop'])}\n"
+        f"TP: ${format_price(result['tp'])}\n"
         f"A favor: {', '.join(result['reasons'])}\n"
         + (f"En conflicto: {', '.join(result['conflict_reasons'])}" if result['conflict_reasons'] else "")
     )
@@ -109,7 +110,7 @@ if TOKEN and CHAT_ID:
             if not ops:
                 send_telegram_message(TOKEN, CHAT_ID, "No hay operaciones en seguimiento.")
             else:
-                lines = [f"{o['symbol']} {o['direction']} | entrada {o['entry']:.2f} | stop {o['stop']:.2f} | tp {o['tp']:.2f}" for o in ops]
+                lines = [f"{o['symbol']} {o['direction']} | entrada {format_price(o['entry'])} | stop {format_price(o['stop'])} | tp {format_price(o['tp'])}" for o in ops]
                 send_telegram_message(TOKEN, CHAT_ID, "*Operaciones en seguimiento:*\n" + "\n".join(lines))
 
         elif cmd == "symbol" and arg:
@@ -146,11 +147,11 @@ for op in db.get_open_operations():
     if hit_tp:
         db.close_operation(op["id"], live_price, "tp")
         if TOKEN and CHAT_ID:
-            send_telegram_message(TOKEN, CHAT_ID, f"🎯 *{op['symbol']}* tocó Take Profit en ${live_price:,.2f}. Operación cerrada en el registro.")
+            send_telegram_message(TOKEN, CHAT_ID, f"🎯 *{op['symbol']}* tocó Take Profit en ${format_price(live_price)}. Operación cerrada en el registro.")
     elif hit_stop:
         db.close_operation(op["id"], live_price, "stop")
         if TOKEN and CHAT_ID:
-            send_telegram_message(TOKEN, CHAT_ID, f"🛑 *{op['symbol']}* tocó Stop Loss en ${live_price:,.2f}. Operación cerrada en el registro.")
+            send_telegram_message(TOKEN, CHAT_ID, f"🛑 *{op['symbol']}* tocó Stop Loss en ${format_price(live_price)}. Operación cerrada en el registro.")
     elif not op["early_warning_sent"]:
         opposite = "VENTA" if op["direction"] == "COMPRA" else "COMPRA"
         if op_result["signal"] == opposite and op_result["status"] == "confirmada":
@@ -159,8 +160,8 @@ for op in db.get_open_operations():
                 send_telegram_message(
                     TOKEN, CHAT_ID,
                     f"⚠️ *{op['symbol']}*: el análisis ahora confirma señal de *{opposite}*, "
-                    f"contraria a tu operación de {op['direction']} abierta en ${op['entry']:,.2f}. "
-                    f"Precio actual: ${live_price:,.2f}. Considera evaluar salir manualmente en Quantfury "
+                    f"contraria a tu operación de {op['direction']} abierta en ${format_price(op['entry'])}. "
+                    f"Precio actual: ${format_price(live_price)}. Considera evaluar salir manualmente en Quantfury "
                     f"para reducir la pérdida potencial."
                 )
 
@@ -268,7 +269,7 @@ with st.expander("🧪 Backtest (probar el sistema con datos históricos)"):
                     emoji = "🟢" if t["pnl_pct"] > 0 else "🔴"
                     st.write(
                         f"{emoji} {t['entry_time'].strftime('%Y-%m-%d %H:%M')} {t['direction']} "
-                        f"@ {t['entry']:.2f} → {t['outcome']} @ {t['close_price']:.2f} "
+                        f"@ {format_price(t['entry'])} → {t['outcome']} @ {format_price(t['close_price'])} "
                         f"({t['pnl_pct']:+.2f}%, {t['bars_held']} velas)"
                     )
 
@@ -362,9 +363,9 @@ with col1:
     st.plotly_chart(fig_adx, use_container_width=True)
 
 with col2:
-    st.metric("Precio actual", f"${result['live_price']:,.2f}")
+    st.metric("Precio actual", f"${format_price(result['live_price'])}")
     if result["price"] != result["live_price"]:
-        st.caption(f"Señal calculada sobre la última vela cerrada (${result['price']:,.2f})")
+        st.caption(f"Señal calculada sobre la última vela cerrada (${format_price(result['price'])})")
 
     signal = result["signal"]
     color = {"COMPRA": "🟢", "VENTA": "🔴", "ESPERA": "🟡"}[signal]
@@ -387,9 +388,9 @@ with col2:
     if result.get("pattern"):
         st.write(f"**Patrón de velas:** envolvente {result['pattern']}")
     if result["support"]:
-        st.write(f"**Soporte cercano:** {result['support']:,.2f}")
+        st.write(f"**Soporte cercano:** {format_price(result['support'])}")
     if result["resistance"]:
-        st.write(f"**Resistencia cercana:** {result['resistance']:,.2f}")
+        st.write(f"**Resistencia cercana:** {format_price(result['resistance'])}")
 
     st.markdown("**Razones a favor:**")
     for r in result["reasons"]:
@@ -403,11 +404,11 @@ with col2:
     if signal in ("COMPRA", "VENTA"):
         st.markdown("**Valores para Quantfury (toca el ícono de copiar en cada uno):**")
         st.caption("Precio de entrada")
-        st.code(f"{result['entry']:.2f}", language=None)
+        st.code(f"{format_price(result['entry'])}", language=None)
         st.caption("Stop loss" + (" (ampliado por volatilidad ATR)" if result.get("stop_widened") else ""))
-        st.code(f"{result['stop']:.2f}", language=None)
+        st.code(f"{format_price(result['stop'])}", language=None)
         st.caption("Take profit")
-        st.code(f"{result['tp']:.2f}", language=None)
+        st.code(f"{format_price(result['tp'])}", language=None)
 
         open_ops_this_symbol = [o for o in db.get_open_operations() if o["symbol"] == symbol]
         if open_ops_this_symbol:
@@ -484,7 +485,7 @@ if open_ops:
             else:
                 progress = (op["entry"] - live) / (op["entry"] - op["tp"]) if op["entry"] != op["tp"] else 0
             progress = max(0, min(1, progress))
-            st.write(f"**{op['symbol']} {op['direction']}** · entrada ${op['entry']:,.2f} · precio actual ${live:,.2f}")
+            st.write(f"**{op['symbol']} {op['direction']}** · entrada ${format_price(op['entry'])} · precio actual ${format_price(live)}")
             st.progress(progress, text=f"{progress*100:.0f}% hacia el take profit")
         except Exception:
             st.write(f"{op['symbol']} {op['direction']} (no se pudo actualizar precio)")
