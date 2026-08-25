@@ -55,7 +55,13 @@ def format_status_message(symbol: str, notifications_enabled: bool, result: dict
     signal_emoji = {"COMPRA": "🟢", "VENTA": "🔴", "ESPERA": "🟡"}[result["signal"]]
     status_tag = ""
     if result["signal"] in ("COMPRA", "VENTA"):
-        status_tag = " (confirmada)" if result.get("status") == "confirmada" else " (en formación)"
+        status_labels = {
+            "confirmada": " (✅ confirmada)",
+            "en formación": " (⏳ en formación)",
+            "filtrada_adx": " (🚫 filtrada: ADX bajo, mercado sin tendencia)",
+            "filtrada_rr": " (🚫 filtrada: riesgo/beneficio pobre)",
+        }
+        status_tag = status_labels.get(result.get("status"), "")
     lines = [
         f"*Estado de alertas:* {estado}",
         f"*Cripto en seguimiento:* {symbol}",
@@ -69,6 +75,10 @@ def format_status_message(symbol: str, notifications_enabled: bool, result: dict
         lines.append(f"Tendencia 1D: {result['trend_1d']}")
     if result["signal"] in ("COMPRA", "VENTA"):
         lines.append(f"Entrada: ${format_price(result['entry'])} | Stop: ${format_price(result['stop'])} | TP: ${format_price(result['tp'])}")
+        if result.get("rr_ratio") is not None:
+            lines.append(f"Ratio riesgo/beneficio: 1:{result['rr_ratio']}")
+        if result.get("status") != "confirmada":
+            lines.append("⚠️ No operable todavía -- revisa el motivo arriba antes de considerar esta señal.")
         if result.get("reasons"):
             lines.append(f"✅ A favor: {', '.join(result['reasons'])}")
         if result.get("conflict_reasons"):
@@ -95,6 +105,10 @@ def format_help_message() -> str:
         "🔄 /symbol PAR\n"
         "Cambia la cripto en seguimiento. El PAR va en formato Binance.\n"
         "Ejemplo: `/symbol ETHUSDT` o `/symbol SOL` (el USDT se agrega solo si lo omites).\n\n"
+        "⭐ /favorites\n"
+        "Muestra tu lista de favoritos (los que usa el modo escaneo).\n\n"
+        "📍 /operations\n"
+        "Muestra tus operaciones en seguimiento (entrada, stop, TP de cada una).\n\n"
         "❓ /help\n"
         "Muestra este mensaje."
     )

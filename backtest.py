@@ -1,10 +1,17 @@
 """
 Backtesting -- corre la lógica EXACTA de evaluate_signal() sobre datos
 históricos, vela por vela, sin look-ahead (cada decisión solo usa datos
-disponibles hasta ese momento). Esto existe porque ajustar pesos/reglas
-basándose en el resultado de una sola operación real es sobreajuste --
-antes de confiar en el sistema en vivo, hay que ver cómo se habría
-comportado en cientos de operaciones pasadas.
+disponibles hasta ese momento).
+
+IMPORTANTE -- por qué existe run_out_of_sample_validation():
+Ajustar parámetros (pesos, topes de riesgo, etc.) mirando el resultado de
+un backtest y luego volver a correr el MISMO backtest para confirmar la
+mejora es la forma más común de sobreajuste ("curve fitting") en trading
+algorítmico -- el sistema aprende a explicar el pasado, no a predecir el
+futuro. La práctica estándar ("walk-forward validation") es dividir el
+histórico en dos partes: una para observar/ajustar, y otra que NUNCA se
+miró antes de fijar los parámetros, para confirmar que el resultado se
+sostiene fuera de la muestra usada para decidir.
 
 Los indicadores se calculan UNA sola vez sobre todo el histórico (son
 causales: EMA/RSI/MACD/ADX en la fila i solo dependen de filas <= i), y
@@ -13,8 +20,7 @@ de información del futuro.
 
 LIMITACIÓN CONOCIDA: la tendencia diaria (1D) que en vivo se calcula con
 velas reales de 1 día, aquí se aproxima con EMA200 del propio timeframe
-(4h) para no requerir una segunda descarga por cada vela evaluada. Es una
-simplificación razonable pero no idéntica al comportamiento en vivo.
+(4h) para no requerir una segunda descarga por cada vela evaluada.
 """
 import numpy as np
 from data_fetch import get_klines
@@ -26,20 +32,13 @@ def _trend_from_ema200(df):
     return np.where(df["close"] > df["ema200"], "alcista", "bajista")
 
 
-def run_backtest(symbol: str, interval: str = "4h", limit: int = 1000, warmup: int = 210):
+def _simulate(df, symbol: str, warmup: int):
     """
-    Devuelve (trades: list[dict], stats: dict).
-    warmup: velas iniciales que se saltan para dar tiempo a que EMA200/ADX
-    se estabilicen antes de empezar a operar (con menos datos, los
-    indicadores de largo plazo son poco confiables).
+    Corre la simulación vela por vela sobre un DataFrame que YA tiene los
+    indicadores calculados. Reutilizado tanto por run_backtest() como por
+    run_out_of_sample_validation() para no duplicar la lógica.
     """
-    raw = get_klines(symbol, interval, limit)
-    df = add_all_indicators(raw)
-    if len(df) < warmup + 5:
-        raise ValueError(f"No hay suficientes velas ({len(df)}) para un backtest confiable (mínimo {warmup + 5}).")
-
     trend_arr = _trend_from_ema200(df)
-
     trades = []
     open_trade = None
     i = warmup
@@ -94,6 +93,61 @@ def run_backtest(symbol: str, interval: str = "4h", limit: int = 1000, warmup: i
     stats["open_at_end"] = open_trade is not None
     stats["candles_used"] = len(df)
     return trades, stats
+
+
+def run_backtest(symbol: str, interval: str = "4h", limit: int = 1000, warmup: int = 210):
+    """
+    Devuelve (trades: list[dict], stats: dict).
+    warmup: velas iniciales que se saltan para dar tiempo a que EMA200/ADX
+    se estabilicen antes de empezar a operar.
+    """
+    raw = get_klines(symbol, interval, limit)
+    df = add_all_indicators(raw)
+    if len(df) < warmup + 5:
+        raise ValueError(f"No hay suficientes velas ({len(df)}) para un backtest confiable (mínimo {warmup + 5}).")
+    return _simulate(df, symbol, warmup)
+
+
+def run_out_of_sample_validation(symbol: str, interval: str = "4h", total_limit: int = 1400,
+                                  split_ratio: float = 0.6, train_warmup: int = 210, test_buffer: int = 150):
+    """
+    Divide el histórico en dos tramos cronológicos:
+      - "train" (entrenamiento/observación): el primer split_ratio del histórico
+      - "test" (fuera de muestra): el resto, que nunca se usó para decidir nada
+
+    Corre la MISMA lógica de señales en ambos tramos por separado. Si el
+    sistema funciona por una ventaja real (y no por casualidad ajustada al
+    tramo de entrenamiento), el desempeño en "test" debería parecerse al
+    de "train" -- no necesariamente igual, pero sin un colapso.
+
+    test_buffer: velas del final de "train" que se incluyen como contexto
+    al inicio de "test" (para que ADX/EMA200/Volume Profile tengan
+    suficiente historia desde la primera vela evaluada del tramo de test;
+    esas velas de contexto NO generan operaciones, solo dan contexto).
+
+    Devuelve {"train": (trades, stats), "test": (trades, stats), "split_time": Timestamp}
+    """
+    raw = get_klines(symbol, interval, total_limit)
+    df = add_all_indicators(raw)
+    n = len(df)
+    mid = int(n * split_ratio)
+
+    if mid < train_warmup + 20 or (n - mid) < 20:
+        raise ValueError(f"No hay suficientes velas ({n}) para dividir en train/test de forma confiable.")
+
+    train_df = df.iloc[:mid].reset_index(drop=True)
+    test_start = max(0, mid - test_buffer)
+    test_df = df.iloc[test_start:].reset_index(drop=True)
+    test_warmup = min(test_buffer, len(test_df) - 10)
+
+    train_trades, train_stats = _simulate(train_df, symbol, warmup=train_warmup)
+    test_trades, test_stats = _simulate(test_df, symbol, warmup=test_warmup)
+
+    return {
+        "train": (train_trades, train_stats),
+        "test": (test_trades, test_stats),
+        "split_time": df.iloc[mid]["open_time"],
+    }
 
 
 def summarize_by_confluence(trades: list) -> dict:

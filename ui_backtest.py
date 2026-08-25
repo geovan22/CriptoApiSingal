@@ -102,3 +102,72 @@ def render_backtest_panel():
                         f"@ {format_price(t['entry'])} → {t['outcome']} @ {format_price(t['close_price'])} "
                         f"({t['pnl_pct']:+.2f}%, {t['bars_held']} velas)"
                     )
+
+    st.divider()
+    st.markdown("### 🔬 Validación fuera de muestra (walk-forward)")
+    st.caption(
+        "Divide el histórico en dos partes cronológicas: la primera mitad (train) es la que hemos "
+        "estado mirando para ajustar el sistema; la segunda (test) NUNCA se usó para decidir nada. "
+        "Si el sistema tiene una ventaja real -- y no solo quedó ajustado al tramo que ya vimos -- "
+        "los resultados de test no deberían verse muy distintos a los de train."
+    )
+    oos_col1, oos_col2 = st.columns([2, 1])
+    with oos_col1:
+        oos_symbol = st.selectbox("Símbolo a validar", config.AVAILABLE_SYMBOLS, key="oos_symbol")
+    with oos_col2:
+        st.write("")
+        st.write("")
+        run_oos = st.button("🔬 Correr validación fuera de muestra")
+
+    if run_oos:
+        try:
+            with st.spinner(f"Validando {oos_symbol} (train/test)..."):
+                oos_result = backtest.run_out_of_sample_validation(oos_symbol, config.INTERVAL, total_limit=1400)
+            st.session_state["oos_result"] = (oos_symbol, oos_result)
+        except Exception as e:
+            st.error(f"No se pudo correr la validación: {e}")
+
+    if "oos_result" in st.session_state:
+        oos_sym, oos_data = st.session_state["oos_result"]
+        train_trades, train_stats = oos_data["train"]
+        test_trades, test_stats = oos_data["test"]
+
+        st.write(f"**{oos_sym}** · corte en {oos_data['split_time'].strftime('%Y-%m-%d %H:%M')}")
+
+        oc1, oc2 = st.columns(2)
+        with oc1:
+            st.markdown("**TRAIN** (ya observado)")
+            if train_stats.get("n_trades", 0) == 0:
+                st.caption("Sin operaciones en este tramo.")
+            else:
+                st.metric("Win rate", f"{train_stats['win_rate']}%")
+                st.metric("Expectativa/op.", f"{train_stats['expectancy_pct']:+.2f}%")
+                st.caption(f"{train_stats['n_trades']} operaciones · PF {train_stats['profit_factor'] or '∞'}")
+        with oc2:
+            st.markdown("**TEST** (fuera de muestra)")
+            if test_stats.get("n_trades", 0) == 0:
+                st.caption("Sin operaciones en este tramo.")
+            else:
+                st.metric("Win rate", f"{test_stats['win_rate']}%")
+                st.metric("Expectativa/op.", f"{test_stats['expectancy_pct']:+.2f}%")
+                st.caption(f"{test_stats['n_trades']} operaciones · PF {test_stats['profit_factor'] or '∞'}")
+
+        if train_stats.get("n_trades", 0) >= 5 and test_stats.get("n_trades", 0) >= 5:
+            train_exp = train_stats["expectancy_pct"]
+            test_exp = test_stats["expectancy_pct"]
+            if test_exp < 0 and train_exp > 0:
+                st.error(
+                    "⚠️ El sistema fue rentable en el tramo que ya observamos (train) pero perdió dinero "
+                    "en el tramo nunca visto (test) -- señal clásica de sobreajuste. Los parámetros "
+                    "actuales podrían estar ajustados al ruido del tramo que miramos, no a una ventaja real."
+                )
+            elif test_exp < train_exp * 0.3 and train_exp > 0:
+                st.warning(
+                    "⚠️ El rendimiento en test es considerablemente más débil que en train -- vale la "
+                    "pena tomar los resultados de train con cautela y no seguir ajustando parámetros "
+                    "mirando solo ese tramo."
+                )
+            else:
+                st.success("✅ El desempeño en test es razonablemente consistente con train -- buena señal de que no es puro sobreajuste.")
+        else:
+            st.info("Pocas operaciones en alguno de los dos tramos para sacar una conclusión firme -- prueba con más velas (total_limit) si quieres más muestra.")
