@@ -13,13 +13,14 @@ from app_state import set_symbol
 from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
 
 
-def check_open_operations():
+def check_open_operations(open_ops: list):
     """
     Para cada operación en seguimiento: si tocó TP o stop, la cierra y
-    registra el resultado. Si el análisis ahora confirma la señal
-    contraria, manda una alerta de salida temprana (una sola vez).
+    registra el resultado. Si alcanzó 1x su riesgo original a favor, mueve
+    el stop a break-even (ya no puede perder). Si el análisis ahora
+    confirma la señal contraria, manda una alerta de salida temprana.
     """
-    for op in db.get_open_operations():
+    for op in open_ops:
         try:
             _, op_result = get_data_and_signal(op["symbol"])
         except Exception:
@@ -35,11 +36,34 @@ def check_open_operations():
             db.close_operation(op["id"], live_price, "tp")
             if TOKEN and CHAT_ID:
                 send_telegram_message(TOKEN, CHAT_ID, f"🎯 *{op['symbol']}* tocó Take Profit en ${format_price(live_price)}. Operación cerrada en el registro.")
-        elif hit_stop:
+            continue
+
+        if hit_stop:
             db.close_operation(op["id"], live_price, "stop")
             if TOKEN and CHAT_ID:
                 send_telegram_message(TOKEN, CHAT_ID, f"🛑 *{op['symbol']}* tocó Stop Loss en ${format_price(live_price)}. Operación cerrada en el registro.")
-        elif not op["early_warning_sent"]:
+            continue
+
+        # --- Break-even automático: si ya ganó 1x su riesgo original, el
+        # stop se mueve al precio de entrada -- de aquí en adelante la
+        # operación no puede terminar en pérdida. ---
+        if not op.get("breakeven_applied"):
+            risk_ref = op.get("initial_stop") or op["stop"]
+            risk_distance = abs(op["entry"] - risk_ref)
+            if risk_distance > 0:
+                profit_distance = (live_price - op["entry"]) if op["direction"] == "COMPRA" else (op["entry"] - live_price)
+                if profit_distance >= risk_distance:
+                    db.apply_breakeven(op["id"], op["entry"])
+                    if TOKEN and CHAT_ID:
+                        send_telegram_message(
+                            TOKEN, CHAT_ID,
+                            f"🔒 *{op['symbol']}*: alcanzó 1x su riesgo original a favor. "
+                            f"Stop movido a punto de entrada (${format_price(op['entry'])}) -- "
+                            f"esta operación ya no puede terminar en pérdida."
+                        )
+
+        # --- Alerta de reversión ---
+        if not op["early_warning_sent"]:
             opposite = "VENTA" if op["direction"] == "COMPRA" else "COMPRA"
             if op_result["signal"] == opposite and op_result["status"] == "confirmada":
                 db.mark_early_warning_sent(op["id"])

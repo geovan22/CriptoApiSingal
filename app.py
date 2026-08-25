@@ -1,18 +1,21 @@
 """
 Crypto Signal Dashboard -- punto de entrada.
 
-La lógica está repartida en módulos por responsabilidad para que sea
-mantenible:
+La lógica está repartida en módulos por responsabilidad:
   app_state.py         - sesión, DB init, refresco dinámico
   signal_service.py     - caché de datos + cálculo de señal
   telegram_handler.py   - comandos entrantes de Telegram
-  operations_monitor.py - cierre automático de operaciones, modo escaneo
+  operations_monitor.py - cierre automático, break-even, modo escaneo
   ui_favorites.py        - panel de favoritos
   ui_backtest.py          - panel de backtest
-  ui_backup.py            - panel de respaldo
+  ui_backup.py            - panel de respaldo + historial
   ui_charts.py            - gráficos
   ui_signal_panel.py      - panel de señal + calculadora
-  ui_operations.py        - operaciones en seguimiento + historial
+  ui_operations.py        - operaciones en seguimiento
+
+UI organizada en pestañas: la pestaña "Señal" (la más usada) es la
+primera y no requiere abrir nada -- las demás secciones quedan a un
+toque de distancia en vez de todas apiladas con scroll largo.
 """
 import time
 import streamlit as st
@@ -34,62 +37,76 @@ st.set_page_config(page_title="Crypto Signal Dashboard", layout="wide")
 
 db.init_db(default_symbols=config.AVAILABLE_SYMBOLS)
 init_session_state()
-refresh_ms, open_ops_count = setup_autorefresh()
+
+# Una sola consulta de operaciones abiertas por refresco, compartida por
+# todos los módulos que la necesitan (antes se consultaba 4 veces).
+open_ops = db.get_open_operations()
+refresh_ms = setup_autorefresh(len(open_ops))
 
 # --- Procesos de fondo (corren en cada refresco) ---
 process_telegram_commands()
-check_open_operations()
+check_open_operations(open_ops)
 run_scan_mode()
 
 # --- UI ---
 st.title("📊 Crypto Signal Dashboard")
 
-render_favorites_panel()
-render_backtest_panel()
-render_backup_panel()
-
-col_sel, col_info = st.columns([1, 2])
-with col_sel:
-    options = config.AVAILABLE_SYMBOLS.copy()
-    if st.session_state.symbol not in options:
-        options.append(st.session_state.symbol)
-    chosen = st.selectbox(
-        "Cripto en seguimiento", options, index=options.index(st.session_state.symbol),
-        disabled=st.session_state.scan_mode,
-    )
-    if chosen != st.session_state.symbol and not st.session_state.scan_mode:
-        set_symbol(chosen)
-
-with col_info:
-    estado = "🟢 Activas" if st.session_state.notifications_enabled else "🔴 Pausadas"
-    st.caption(
-        f"Alertas Telegram: {estado} · Timeframe {config.INTERVAL} · "
-        f"Refresco cada {refresh_ms // 1000}s{' (acelerado, hay operaciones abiertas)' if open_ops_count else ''} · "
-        f"Última actualización: {time.strftime('%H:%M:%S')}"
-    )
-    st.caption("Comandos por Telegram: /start /stop /status /now /symbol PAR /favorites /operations")
-
-symbol = st.session_state.symbol
-
-try:
-    with st.spinner(f"Cargando datos de {symbol}..."):
-        df, result = get_data_and_signal(symbol)
-except Exception as e:
-    st.error(f"Error obteniendo datos de {symbol}: {e}")
-    st.stop()
-
-col1, col2 = st.columns([3, 1])
-with col1:
-    render_charts(df, symbol)
-with col2:
-    render_signal_panel(symbol, result)
-
-render_operations_panel()
-
-st.divider()
-st.caption(
-    "⚠️ Herramienta de apoyo técnico, no es asesoría financiera. "
-    "Las señales combinan MACD, RSI, PVT, delta, ADX, patrón de velas y niveles de "
-    "soporte/resistencia, calculadas solo sobre velas cerradas — no garantizan "
-    "resultados. Define siempre tu propia gestión de riesgo."
+tab_signal, tab_favorites, tab_backtest, tab_backup = st.tabs(
+    ["📈 Señal", "⭐ Favoritos", "🧪 Backtest", "💾 Historial/Respaldo"]
 )
+
+with tab_favorites:
+    render_favorites_panel()
+
+with tab_backtest:
+    render_backtest_panel()
+
+with tab_backup:
+    render_backup_panel()
+
+with tab_signal:
+    col_sel, col_info = st.columns([1, 2])
+    with col_sel:
+        options = config.AVAILABLE_SYMBOLS.copy()
+        if st.session_state.symbol not in options:
+            options.append(st.session_state.symbol)
+        chosen = st.selectbox(
+            "Cripto en seguimiento", options, index=options.index(st.session_state.symbol),
+            disabled=st.session_state.scan_mode,
+        )
+        if chosen != st.session_state.symbol and not st.session_state.scan_mode:
+            set_symbol(chosen)
+
+    with col_info:
+        estado = "🟢 Activas" if st.session_state.notifications_enabled else "🔴 Pausadas"
+        st.caption(
+            f"Alertas Telegram: {estado} · Timeframe {config.INTERVAL} · "
+            f"Refresco cada {refresh_ms // 1000}s{' (acelerado, hay operaciones abiertas)' if open_ops else ''} · "
+            f"Última actualización: {time.strftime('%H:%M:%S')}"
+        )
+        st.caption("Comandos por Telegram: /start /stop /status /now /symbol PAR /favorites /operations")
+
+    symbol = st.session_state.symbol
+
+    try:
+        with st.spinner(f"Cargando datos de {symbol}..."):
+            df, result = get_data_and_signal(symbol)
+    except Exception as e:
+        st.error(f"Error obteniendo datos de {symbol}: {e}")
+        st.stop()
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        render_charts(df, symbol)
+    with col2:
+        render_signal_panel(symbol, result, open_ops)
+
+    render_operations_panel(open_ops)
+
+    st.divider()
+    st.caption(
+        "⚠️ Herramienta de apoyo técnico, no es asesoría financiera. "
+        "Las señales combinan MACD, RSI, PVT, delta, ADX, patrón de velas y niveles de "
+        "soporte/resistencia, calculadas solo sobre velas cerradas — no garantizan "
+        "resultados. Define siempre tu propia gestión de riesgo."
+    )

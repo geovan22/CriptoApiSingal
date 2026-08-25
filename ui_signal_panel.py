@@ -1,11 +1,26 @@
 """Panel de señal: métricas, valores para copiar a Quantfury, calculadora de
 ganancia/pérdida con position sizing por riesgo, y disparo de alerta a Telegram."""
+import pandas as pd
 import streamlit as st
 
 import config
 import db
 from price_format import format_price
 from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
+
+
+def _next_candle_close(interval_hours: int = 4) -> pd.Timestamp:
+    now = pd.Timestamp.now(tz="UTC")
+    boundary_hour = ((now.hour // interval_hours) + 1) * interval_hours
+    if boundary_hour >= 24:
+        return now.normalize() + pd.Timedelta(days=1)
+    return now.normalize() + pd.Timedelta(hours=boundary_hour)
+
+
+def _format_timedelta(td: pd.Timedelta) -> str:
+    total_min = int(td.total_seconds() // 60)
+    h, m = divmod(total_min, 60)
+    return f"{h}h {m}min" if h else f"{m}min"
 
 
 def _render_signal_metrics(result: dict):
@@ -62,8 +77,8 @@ def _render_quantfury_values(result: dict):
     st.code(f"{format_price(result['tp'])}", language=None)
 
 
-def _render_accept_operation_button(symbol: str, signal: str, result: dict):
-    open_ops_this_symbol = [o for o in db.get_open_operations() if o["symbol"] == symbol]
+def _render_accept_operation_button(symbol: str, signal: str, result: dict, open_ops: list):
+    open_ops_this_symbol = [o for o in open_ops if o["symbol"] == symbol]
     if open_ops_this_symbol:
         st.info(f"Ya tienes una operación de {symbol} en seguimiento.")
     else:
@@ -153,7 +168,7 @@ def _maybe_send_alert(symbol: str, signal: str, result: dict, alert_key: str):
             st.warning(f"No se pudo enviar Telegram: {info}")
 
 
-def render_signal_panel(symbol: str, result: dict):
+def render_signal_panel(symbol: str, result: dict, open_ops: list):
     """Panel completo de la columna derecha: métricas, valores, calculadora, alerta."""
     _render_signal_metrics(result)
 
@@ -162,9 +177,12 @@ def render_signal_panel(symbol: str, result: dict):
 
     if signal in ("COMPRA", "VENTA"):
         _render_quantfury_values(result)
-        _render_accept_operation_button(symbol, signal, result)
+        _render_accept_operation_button(symbol, signal, result, open_ops)
         _render_calculator(symbol, signal, result, alert_key)
         _maybe_send_alert(symbol, signal, result, alert_key)
     else:
         st.info("Sin señal confirmada — mercado en zona de espera.")
+        st.caption(f"Confluencia actual: {result['buy_score']} a favor de compra vs {result['sell_score']} a favor de venta (se necesita ≥3 y mayoría clara).")
+        remaining = _next_candle_close() - pd.Timestamp.now(tz="UTC")
+        st.caption(f"⏱️ Próxima vela cierra en {_format_timedelta(remaining)} -- el análisis solo cambia al cerrar una vela.")
         st.session_state.last_alert = alert_key

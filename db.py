@@ -80,6 +80,17 @@ def init_db(default_symbols=None):
                 for s in default_symbols:
                     c.execute("INSERT OR IGNORE INTO favorites (symbol) VALUES (?)", [s])
 
+        # Migración segura: agregar columnas de break-even si no existen todavía
+        # (ALTER TABLE ADD COLUMN falla si ya existe -- se ignora ese error).
+        for stmt in [
+            "ALTER TABLE operations ADD COLUMN initial_stop REAL",
+            "ALTER TABLE operations ADD COLUMN breakeven_applied INTEGER DEFAULT 0",
+        ]:
+            try:
+                c.execute(stmt)
+            except Exception:
+                pass
+
 
 # --- Favoritos ---
 def get_favorites() -> list:
@@ -118,9 +129,9 @@ def set_state(key: str, value: str):
 def create_operation(symbol, direction, entry, stop, tp) -> int:
     with _get_client() as c:
         rs = c.execute(
-            "INSERT INTO operations (symbol, direction, entry, stop, tp, opened_at, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'open') RETURNING id",
-            [symbol, direction, entry, stop, tp, datetime.now(timezone.utc).isoformat()],
+            "INSERT INTO operations (symbol, direction, entry, stop, tp, opened_at, status, initial_stop) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?) RETURNING id",
+            [symbol, direction, entry, stop, tp, datetime.now(timezone.utc).isoformat(), stop],
         )
         return rs.rows[0][0]
 
@@ -161,6 +172,16 @@ def mark_early_warning_sent(op_id: int):
         c.execute("UPDATE operations SET early_warning_sent = 1 WHERE id = ?", [op_id])
 
 
+def apply_breakeven(op_id: int, new_stop: float):
+    """Mueve el stop al precio de entrada (o cerca) una vez que la operación
+    alcanzó 1x su riesgo original -- desde ese punto ya no puede perder."""
+    with _get_client() as c:
+        c.execute(
+            "UPDATE operations SET stop = ?, breakeven_applied = 1 WHERE id = ?",
+            [new_stop, op_id],
+        )
+
+
 # --- Respaldo ---
 def export_backup() -> str:
     with _get_client() as c:
@@ -188,9 +209,10 @@ def import_backup(json_text: str):
                 continue
             c.execute(
                 "INSERT INTO operations (id, symbol, direction, entry, stop, tp, opened_at, closed_at, "
-                "status, outcome, close_price, pnl_pct, early_warning_sent) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "status, outcome, close_price, pnl_pct, early_warning_sent, initial_stop, breakeven_applied) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [op["id"], op["symbol"], op["direction"], op["entry"], op["stop"], op["tp"],
                  op["opened_at"], op.get("closed_at"), op["status"], op.get("outcome"),
-                 op.get("close_price"), op.get("pnl_pct"), op.get("early_warning_sent", 0)],
+                 op.get("close_price"), op.get("pnl_pct"), op.get("early_warning_sent", 0),
+                 op.get("initial_stop", op["stop"]), op.get("breakeven_applied", 0)],
             )
