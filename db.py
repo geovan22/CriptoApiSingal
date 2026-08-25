@@ -22,6 +22,11 @@ Cómo activar el modo Turso (gratis, ~5 minutos):
   5. Agrega esos dos valores como secrets (igual que hiciste con Telegram):
      TURSO_DATABASE_URL = "libsql://tu-db-tu-usuario.turso.io"
      TURSO_AUTH_TOKEN = "tu_token_aqui"
+
+NOTA TÉCNICA: el cliente de Python trata el esquema libsql:// como
+equivalente a wss:// (WebSocket). Streamlit Cloud bloquea/interfiere con
+WebSockets salientes, así que aquí forzamos https:// (protocolo HTTP de
+Hrana) al conectar -- más compatible con entornos cloud restringidos.
 """
 import json
 from datetime import datetime, timezone
@@ -40,7 +45,8 @@ LOCAL_DB_PATH = "file:crypto_dashboard.db"
 
 def _get_client():
     if _TURSO_URL:
-        return libsql_client.create_client_sync(url=_TURSO_URL, auth_token=_TURSO_TOKEN)
+        url = _TURSO_URL.replace("libsql://", "https://", 1)
+        return libsql_client.create_client_sync(url=url, auth_token=_TURSO_TOKEN)
     return libsql_client.create_client_sync(LOCAL_DB_PATH)
 
 
