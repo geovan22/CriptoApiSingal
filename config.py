@@ -51,6 +51,13 @@ AVAILABLE_SYMBOLS = [
 # consistente con el análisis manual que ya veníamos haciendo en el chat)
 INTERVAL = "4h"
 
+# Velas de "enfriamiento" tras un stop-loss antes de volver a permitir
+# señal en el MISMO símbolo y MISMA dirección. Práctica estándar en
+# trading algorítmico para evitar "revenge trading" automatizado --
+# reentrar de inmediato en la misma trampa que acaba de fallar.
+# 2 velas de 4h = 8 horas de espera tras un stop.
+COOLDOWN_CANDLES = 2
+
 # --- Gestión de riesgo ---
 # Distancia máxima permitida para el stop loss, como % del precio de entrada.
 #

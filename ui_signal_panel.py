@@ -5,6 +5,7 @@ import streamlit as st
 
 import config
 import db
+import risk_rules
 from price_format import format_price
 from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
 
@@ -81,11 +82,17 @@ def _render_accept_operation_button(symbol: str, signal: str, result: dict, open
     open_ops_this_symbol = [o for o in open_ops if o["symbol"] == symbol]
     if open_ops_this_symbol:
         st.info(f"Ya tienes una operación de {symbol} en seguimiento.")
-    else:
-        if st.button("✅ Aceptar y dar seguimiento a esta operación"):
-            db.create_operation(symbol, signal, result["entry"], result["stop"], result["tp"])
-            st.success("Operación en seguimiento. Se revisa automáticamente cada refresco.")
-            st.rerun()
+        return
+
+    in_cooldown, cooldown_msg = risk_rules.check_cooldown(symbol, signal)
+    if in_cooldown:
+        st.warning(cooldown_msg)
+        return
+
+    if st.button("✅ Aceptar y dar seguimiento a esta operación"):
+        db.create_operation(symbol, signal, result["entry"], result["stop"], result["tp"])
+        st.success("Operación en seguimiento. Se revisa automáticamente cada refresco.")
+        st.rerun()
 
 
 def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str):
@@ -160,6 +167,9 @@ def _maybe_send_alert(symbol: str, signal: str, result: dict, alert_key: str):
         and st.session_state.notifications_enabled
         and TOKEN and CHAT_ID
     ):
+        in_cooldown, _ = risk_rules.check_cooldown(symbol, signal)
+        if in_cooldown:
+            return
         ok, info = send_signal_alert(symbol, result)
         if ok:
             st.session_state.last_alert = alert_key

@@ -87,6 +87,13 @@ def render_backtest_panel():
             )
             if bt_stats["n_trades"] < 20:
                 st.info("Con menos de 20 operaciones la muestra es chica -- prueba con más velas históricas antes de sacar conclusiones firmes.")
+
+            confluence = backtest.summarize_by_confluence(bt_trades)
+            if confluence:
+                st.markdown("**Desglose por nivel de confluencia** (¿más razones a favor = mejor resultado?)")
+                for label, stats_c in confluence.items():
+                    st.write(f"- {label}: {stats_c['n_trades']} operaciones · win rate {stats_c['win_rate']}% · PnL prom. {stats_c['avg_pnl_pct']:+.2f}%")
+
             with st.expander("Ver todas las operaciones simuladas"):
                 for t in bt_trades:
                     emoji = "🟢" if t["pnl_pct"] > 0 else "🔴"

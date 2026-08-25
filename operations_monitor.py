@@ -6,6 +6,7 @@ import streamlit as st
 
 import config
 import db
+import risk_rules
 from price_format import format_price
 from telegram_alert import send_telegram_message
 from signal_service import get_data_and_signal
@@ -93,6 +94,9 @@ def run_scan_mode():
         except Exception:
             continue
         if fav_result["signal"] in ("COMPRA", "VENTA") and fav_result["status"] == "confirmada":
+            in_cooldown, _ = risk_rules.check_cooldown(fav_symbol, fav_result["signal"])
+            if in_cooldown:
+                continue
             found = (fav_symbol, fav_result)
             break
 

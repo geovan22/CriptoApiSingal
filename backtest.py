@@ -49,6 +49,7 @@ def run_backtest(symbol: str, interval: str = "4h", limit: int = 1000, warmup: i
             window = df.iloc[:i + 1]
             result = evaluate_signal(window, trend_1d=trend_arr[i])
             if result["signal"] in ("COMPRA", "VENTA") and result["status"] == "confirmada":
+                entry_score = result["buy_score"] if result["signal"] == "COMPRA" else result["sell_score"]
                 open_trade = {
                     "symbol": symbol,
                     "direction": result["signal"],
@@ -57,6 +58,7 @@ def run_backtest(symbol: str, interval: str = "4h", limit: int = 1000, warmup: i
                     "tp": result["tp"],
                     "entry_index": i,
                     "entry_time": df.iloc[i]["open_time"],
+                    "entry_score": entry_score,
                 }
             i += 1
         else:
@@ -92,6 +94,38 @@ def run_backtest(symbol: str, interval: str = "4h", limit: int = 1000, warmup: i
     stats["open_at_end"] = open_trade is not None
     stats["candles_used"] = len(df)
     return trades, stats
+
+
+def summarize_by_confluence(trades: list) -> dict:
+    """
+    Desglosa el desempeño según el puntaje de confluencia con el que se
+    abrió cada operación. Responde una pregunta que no se puede asumir --
+    hay que comprobarla: ¿las señales con más razones a favor de verdad
+    rinden mejor, o el sistema gana igual sin importar el puntaje exacto?
+    """
+    buckets = {"3.0 - 3.9 (mínimo)": [], "4.0 - 4.9": [], "5.0+": []}
+    for t in trades:
+        score = t.get("entry_score")
+        if score is None:
+            continue
+        if score < 4:
+            buckets["3.0 - 3.9 (mínimo)"].append(t)
+        elif score < 5:
+            buckets["4.0 - 4.9"].append(t)
+        else:
+            buckets["5.0+"].append(t)
+
+    out = {}
+    for label, ts in buckets.items():
+        if not ts:
+            continue
+        wins = sum(1 for t in ts if t["pnl_pct"] > 0)
+        out[label] = {
+            "n_trades": len(ts),
+            "win_rate": round(wins / len(ts) * 100, 1),
+            "avg_pnl_pct": round(sum(t["pnl_pct"] for t in ts) / len(ts), 2),
+        }
+    return out
 
 
 def summarize_trades(trades: list) -> dict:
