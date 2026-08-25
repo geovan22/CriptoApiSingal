@@ -57,3 +57,9 @@ REFRESH_SECONDS = 60
 # --- Telegram: se lee de secrets/env, nunca hardcodeado aquí ---
 TELEGRAM_TOKEN = _get_secret("TELEGRAM_TOKEN", os.getenv("TELEGRAM_TOKEN", ""))
 TELEGRAM_CHAT_ID = _get_secret("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", ""))
+
+# --- Turso (base de datos persistente, opcional) ---
+# Si se dejan vacíos, db.py usa un archivo SQLite local automáticamente.
+# Ver instrucciones de configuración al inicio de db.py.
+TURSO_DATABASE_URL = _get_secret("TURSO_DATABASE_URL", os.getenv("TURSO_DATABASE_URL", ""))
+TURSO_AUTH_TOKEN = _get_secret("TURSO_AUTH_TOKEN", os.getenv("TURSO_AUTH_TOKEN", ""))

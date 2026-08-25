@@ -24,6 +24,7 @@ IMPORTANTE:
 """
 import pandas as pd
 import numpy as np
+from indicators import detect_engulfing
 
 WEIGHTS = {
     "macd": 1.0,
@@ -32,6 +33,7 @@ WEIGHTS = {
     "delta": 1.5,
     "level": 1.0,
     "trend_1d": 0.5,
+    "pattern": 0.5,
 }
 
 
@@ -119,6 +121,22 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
     else:
         delta_state = "equilibrado"
 
+    # ADX: fuerza de tendencia (no direccional). No suma puntos a favor/en
+    # contra directamente -- se usa para avisar cuando el mercado está
+    # lateral y las señales de MACD/EMA son menos fiables en ese contexto.
+    adx_val = last.get("adx14", 0)
+    if adx_val >= 25:
+        trend_strength = "fuerte"
+    elif adx_val >= 20:
+        trend_strength = "moderada"
+    else:
+        trend_strength = "lateral/débil"
+
+    atr_val = last.get("atr14", None)
+
+    # Patrón de velas envolvente (clásico, del ebook de patrones)
+    pattern = detect_engulfing(df)
+
     supports, resistances = find_swing_levels(df)
     price = last["close"]
     near_support = nearest_level(price, supports, above=False)
@@ -183,6 +201,14 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         sell_score += WEIGHTS["trend_1d"]
         sell_reasons.append("Tendencia diaria (1D) bajista")
 
+    # Patrón de velas envolvente (peso 0.5)
+    if pattern == "alcista":
+        buy_score += WEIGHTS["pattern"]
+        buy_reasons.append("Patrón envolvente alcista (2 últimas velas)")
+    elif pattern == "bajista":
+        sell_score += WEIGHTS["pattern"]
+        sell_reasons.append("Patrón envolvente bajista (2 últimas velas)")
+
     if buy_score >= 3 and buy_score > sell_score:
         signal = "COMPRA"
     elif sell_score >= 3 and sell_score > buy_score:
@@ -200,6 +226,10 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         "delta_pct": round(delta_pct * 100, 1),
         "support": near_support,
         "resistance": near_resistance,
+        "adx": round(adx_val, 1),
+        "trend_strength": trend_strength,
+        "atr": atr_val,
+        "pattern": pattern,
     }
     return signal, buy_score, sell_score, buy_reasons, sell_reasons, extras
 
@@ -237,16 +267,24 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
     price = extras["price"]
     near_support = extras["support"]
     near_resistance = extras["resistance"]
+    atr_val = extras["atr"]
 
     entry = stop = tp = None
+    stop_widened = False
     if signal == "COMPRA":
         entry = price
         stop = near_support * 0.997 if near_support else price * 0.98
         tp = near_resistance if near_resistance else price * 1.03
+        if atr_val and (entry - stop) < atr_val:
+            stop = entry - atr_val
+            stop_widened = True
     elif signal == "VENTA":
         entry = price
         stop = near_resistance * 1.003 if near_resistance else price * 1.02
         tp = near_support if near_support else price * 0.97
+        if atr_val and (stop - entry) < atr_val:
+            stop = entry + atr_val
+            stop_widened = True
 
     return {
         "signal": signal,
@@ -261,6 +299,9 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
         "delta_state": extras["delta_state"],
         "delta_pct": extras["delta_pct"],
         "trend_1d": trend_1d,
+        "adx": extras["adx"],
+        "trend_strength": extras["trend_strength"],
+        "pattern": extras["pattern"],
         "support": near_support,
         "resistance": near_resistance,
         "buy_score": round(buy_score, 2),
@@ -270,4 +311,5 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
         "entry": entry,
         "stop": stop,
         "tp": tp,
+        "stop_widened": stop_widened,
     }

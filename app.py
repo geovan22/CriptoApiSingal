@@ -4,6 +4,8 @@ import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
 import config
+import db
+import backtest
 from data_fetch import get_klines
 from indicators import add_all_indicators
 from signals import evaluate_signal, get_daily_trend
@@ -11,20 +13,29 @@ from telegram_alert import send_telegram_message
 from telegram_bot import get_updates, parse_commands, format_status_message, format_help_message
 
 st.set_page_config(page_title="Crypto Signal Dashboard", layout="wide")
-st_autorefresh(interval=config.REFRESH_SECONDS * 1000, key="refresh")
+
+db.init_db(default_symbols=config.AVAILABLE_SYMBOLS)
 
 # --- Estado persistente durante la sesión ---
 if "symbol" not in st.session_state:
-    st.session_state.symbol = config.DEFAULT_SYMBOL
+    st.session_state.symbol = db.get_state("last_symbol", config.DEFAULT_SYMBOL)
 if "notifications_enabled" not in st.session_state:
     st.session_state.notifications_enabled = True
 if "telegram_offset" not in st.session_state:
     st.session_state.telegram_offset = 0
 if "last_alert" not in st.session_state:
     st.session_state.last_alert = None
+if "scan_mode" not in st.session_state:
+    st.session_state.scan_mode = False
 
 TOKEN = config.TELEGRAM_TOKEN
 CHAT_ID = config.TELEGRAM_CHAT_ID
+
+# Refresco dinámico: si hay operaciones en seguimiento, revisa cada 20s;
+# si no, cada REFRESH_SECONDS (60s por defecto) para no gastar de más.
+_open_ops_count = len(db.get_open_operations())
+_refresh_ms = 20_000 if _open_ops_count > 0 else config.REFRESH_SECONDS * 1000
+st_autorefresh(interval=_refresh_ms, key="refresh")
 
 
 @st.cache_data(ttl=55, show_spinner=False)
@@ -32,7 +43,7 @@ def cached_klines(symbol: str, interval: str, limit: int):
     return get_klines(symbol, interval, limit)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)  # la tendencia diaria casi no cambia, se cachea 1h
+@st.cache_data(ttl=3600, show_spinner=False)
 def cached_daily_trend(symbol: str):
     df_1d = cached_klines(symbol, "1d", 100)
     df_1d = add_all_indicators(df_1d)
@@ -50,7 +61,25 @@ def get_data_and_signal(symbol: str):
     return df, result
 
 
-# --- Procesar comandos pendientes de Telegram (/start /stop /status /now /symbol) ---
+def set_symbol(new_symbol: str):
+    st.session_state.symbol = new_symbol
+    db.set_state("last_symbol", new_symbol)
+
+
+def send_signal_alert(symbol, result):
+    msg = (
+        f"*{result['signal']}* señal CONFIRMADA en *{symbol}* ({config.INTERVAL})\n"
+        f"Precio: ${result['price']:,.2f}\n"
+        f"Entrada: ${result['entry']:,.2f}\n"
+        f"Stop: ${result['stop']:,.2f}\n"
+        f"TP: ${result['tp']:,.2f}\n"
+        f"A favor: {', '.join(result['reasons'])}\n"
+        + (f"En conflicto: {', '.join(result['conflict_reasons'])}" if result['conflict_reasons'] else "")
+    )
+    return send_telegram_message(TOKEN, CHAT_ID, msg)
+
+
+# --- Procesar comandos de Telegram ---
 if TOKEN and CHAT_ID:
     updates = get_updates(TOKEN, offset=st.session_state.telegram_offset)
     commands, max_update_id = parse_commands(updates, CHAT_ID)
@@ -71,11 +100,23 @@ if TOKEN and CHAT_ID:
         elif cmd == "help":
             send_telegram_message(TOKEN, CHAT_ID, format_help_message())
 
+        elif cmd == "favorites":
+            favs = db.get_favorites()
+            send_telegram_message(TOKEN, CHAT_ID, "*Favoritos:*\n" + ("\n".join(f"- {s}" for s in favs) if favs else "(ninguno)"))
+
+        elif cmd == "operations":
+            ops = db.get_open_operations()
+            if not ops:
+                send_telegram_message(TOKEN, CHAT_ID, "No hay operaciones en seguimiento.")
+            else:
+                lines = [f"{o['symbol']} {o['direction']} | entrada {o['entry']:.2f} | stop {o['stop']:.2f} | tp {o['tp']:.2f}" for o in ops]
+                send_telegram_message(TOKEN, CHAT_ID, "*Operaciones en seguimiento:*\n" + "\n".join(lines))
+
         elif cmd == "symbol" and arg:
             symbol = arg if arg.endswith("USDT") else f"{arg}USDT"
             try:
-                get_klines(symbol, config.INTERVAL, limit=5)  # validar que el par existe
-                st.session_state.symbol = symbol
+                get_klines(symbol, config.INTERVAL, limit=5)
+                set_symbol(symbol)
                 send_telegram_message(TOKEN, CHAT_ID, f"✅ Ahora siguiendo *{symbol}*.")
             except Exception:
                 send_telegram_message(TOKEN, CHAT_ID, f"⚠️ No encontré el par *{symbol}* en Binance. Verifica el nombre (ej. /symbol ETHUSDT).")
@@ -89,25 +130,184 @@ if TOKEN and CHAT_ID:
             except Exception as e:
                 send_telegram_message(TOKEN, CHAT_ID, f"⚠️ No pude obtener datos ahora mismo: {e}")
 
+# --- Revisar operaciones en seguimiento: cierre automático + alerta de salida temprana ---
+for op in db.get_open_operations():
+    try:
+        _, op_result = get_data_and_signal(op["symbol"])
+    except Exception:
+        continue
+    live_price = op_result["live_price"]
+
+    hit_tp = (op["direction"] == "COMPRA" and live_price >= op["tp"]) or \
+             (op["direction"] == "VENTA" and live_price <= op["tp"])
+    hit_stop = (op["direction"] == "COMPRA" and live_price <= op["stop"]) or \
+               (op["direction"] == "VENTA" and live_price >= op["stop"])
+
+    if hit_tp:
+        db.close_operation(op["id"], live_price, "tp")
+        if TOKEN and CHAT_ID:
+            send_telegram_message(TOKEN, CHAT_ID, f"🎯 *{op['symbol']}* tocó Take Profit en ${live_price:,.2f}. Operación cerrada en el registro.")
+    elif hit_stop:
+        db.close_operation(op["id"], live_price, "stop")
+        if TOKEN and CHAT_ID:
+            send_telegram_message(TOKEN, CHAT_ID, f"🛑 *{op['symbol']}* tocó Stop Loss en ${live_price:,.2f}. Operación cerrada en el registro.")
+    elif not op["early_warning_sent"]:
+        opposite = "VENTA" if op["direction"] == "COMPRA" else "COMPRA"
+        if op_result["signal"] == opposite and op_result["status"] == "confirmada":
+            db.mark_early_warning_sent(op["id"])
+            if TOKEN and CHAT_ID:
+                send_telegram_message(
+                    TOKEN, CHAT_ID,
+                    f"⚠️ *{op['symbol']}*: el análisis ahora confirma señal de *{opposite}*, "
+                    f"contraria a tu operación de {op['direction']} abierta en ${op['entry']:,.2f}. "
+                    f"Precio actual: ${live_price:,.2f}. Considera evaluar salir manualmente en Quantfury "
+                    f"para reducir la pérdida potencial."
+                )
+
+# --- Modo escaneo de favoritos ---
+if st.session_state.scan_mode:
+    favorites = db.get_favorites()
+    found = None
+    for fav_symbol in favorites:
+        try:
+            _, fav_result = get_data_and_signal(fav_symbol)
+        except Exception:
+            continue
+        if fav_result["signal"] in ("COMPRA", "VENTA") and fav_result["status"] == "confirmada":
+            found = (fav_symbol, fav_result)
+            break
+    if found:
+        fav_symbol, fav_result = found
+        set_symbol(fav_symbol)
+        alert_key = f"{fav_symbol}:{fav_result['signal']}"
+        if st.session_state.last_alert != alert_key and st.session_state.notifications_enabled and TOKEN and CHAT_ID:
+            ok, _ = send_signal_alert(fav_symbol, fav_result)
+            if ok:
+                st.session_state.last_alert = alert_key
+
 # --- UI ---
 st.title("📊 Crypto Signal Dashboard")
+
+with st.expander("⭐ Favoritos y modo escaneo"):
+    favorites = db.get_favorites()
+    st.write("Favoritos actuales:", ", ".join(favorites) if favorites else "(ninguno)")
+
+    fcol1, fcol2 = st.columns([2, 1])
+    with fcol1:
+        new_fav = st.text_input("Agregar par (ej. ETHUSDT)", key="new_fav_input")
+    with fcol2:
+        st.write("")
+        st.write("")
+        if st.button("Agregar a favoritos") and new_fav:
+            sym = new_fav.upper().strip()
+            sym = sym if sym.endswith("USDT") else f"{sym}USDT"
+            db.add_favorite(sym)
+            st.rerun()
+
+    if favorites:
+        rm_choice = st.selectbox("Quitar de favoritos", ["(elegir)"] + favorites, key="rm_fav_select")
+        if rm_choice != "(elegir)" and st.button("Quitar"):
+            db.remove_favorite(rm_choice)
+            st.rerun()
+
+    st.session_state.scan_mode = st.checkbox(
+        "🔍 Modo escaneo: buscar señal automáticamente solo en favoritos",
+        value=st.session_state.scan_mode,
+    )
+    if st.session_state.scan_mode:
+        st.caption(
+            "Revisa tus favoritos en cada refresco y cambia automáticamente al primero que tenga "
+            "una señal confirmada. Sigue buscando mientras esta pestaña esté abierta."
+        )
+
+with st.expander("🧪 Backtest (probar el sistema con datos históricos)"):
+    st.caption(
+        "Corre la lógica exacta de señales sobre velas pasadas, sin trampas -- cada decisión "
+        "usa solo datos disponibles hasta ese momento. Sirve para ver si el sistema tiene "
+        "ventaja estadística real antes de confiar en él con dinero en vivo."
+    )
+    bt_col1, bt_col2, bt_col3 = st.columns([1.5, 1, 1])
+    with bt_col1:
+        bt_symbol = st.selectbox("Símbolo a probar", config.AVAILABLE_SYMBOLS, key="bt_symbol")
+    with bt_col2:
+        bt_limit = st.slider("Velas históricas", 300, 1000, 700, step=50, key="bt_limit")
+    with bt_col3:
+        st.write("")
+        st.write("")
+        run_bt = st.button("▶️ Correr backtest")
+
+    if run_bt:
+        try:
+            with st.spinner(f"Simulando {bt_limit} velas de {bt_symbol}..."):
+                trades, stats = backtest.run_backtest(bt_symbol, config.INTERVAL, limit=bt_limit)
+            st.session_state["bt_result"] = (bt_symbol, trades, stats)
+        except Exception as e:
+            st.error(f"No se pudo correr el backtest: {e}")
+
+    if "bt_result" in st.session_state:
+        bt_sym, bt_trades, bt_stats = st.session_state["bt_result"]
+        if bt_stats.get("n_trades", 0) == 0:
+            st.warning(f"El sistema no generó ninguna operación confirmada para {bt_sym} en ese rango.")
+        else:
+            st.write(f"**Resultados para {bt_sym}** ({bt_stats['candles_used']} velas, "
+                      f"{bt_stats['n_trades']} operaciones: {bt_stats['compra_count']} compras, "
+                      f"{bt_stats['venta_count']} ventas)")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Win rate", f"{bt_stats['win_rate']}%")
+            m2.metric("Expectativa/operación", f"{bt_stats['expectancy_pct']:+.2f}%")
+            m3.metric("Profit factor", bt_stats['profit_factor'] if bt_stats['profit_factor'] else "∞")
+            m4.metric("Drawdown máx.", f"{bt_stats['max_drawdown_pct']:.2f}%")
+            st.caption(
+                f"Ganancia prom.: {bt_stats['avg_win_pct']:+.2f}% · Pérdida prom.: {bt_stats['avg_loss_pct']:+.2f}% · "
+                f"PnL total acumulado: {bt_stats['total_pnl_pct']:+.2f}% · Velas promedio por operación: {bt_stats['avg_bars_held']}"
+            )
+            if bt_stats["n_trades"] < 20:
+                st.info("Con menos de 20 operaciones la muestra es chica -- prueba con más velas históricas antes de sacar conclusiones firmes.")
+            with st.expander("Ver todas las operaciones simuladas"):
+                for t in bt_trades:
+                    emoji = "🟢" if t["pnl_pct"] > 0 else "🔴"
+                    st.write(
+                        f"{emoji} {t['entry_time'].strftime('%Y-%m-%d %H:%M')} {t['direction']} "
+                        f"@ {t['entry']:.2f} → {t['outcome']} @ {t['close_price']:.2f} "
+                        f"({t['pnl_pct']:+.2f}%, {t['bars_held']} velas)"
+                    )
+
+with st.expander("💾 Respaldo de datos (favoritos, historial, estado)"):
+    db_mode = "☁️ Turso (persistente en la nube)" if config.TURSO_DATABASE_URL else "💻 Local (puede perderse si Streamlit Cloud reinicia el contenedor)"
+    st.caption(f"Modo de base de datos: **{db_mode}**")
+    if not config.TURSO_DATABASE_URL:
+        st.caption(
+            "El disco de Streamlit Cloud puede reiniciarse. Descarga un respaldo de vez en cuando "
+            "para no perder tus favoritos ni tu historial de operaciones, o configura Turso "
+            "(gratis) para que sea permanente -- ver instrucciones al inicio de db.py."
+        )
+    st.download_button("Descargar respaldo (JSON)", db.export_backup(), file_name="crypto_dashboard_backup.json")
+    uploaded = st.file_uploader("Restaurar desde respaldo", type="json", key="restore_upload")
+    if uploaded and st.button("Restaurar"):
+        db.import_backup(uploaded.read().decode("utf-8"))
+        st.success("Respaldo restaurado.")
+        st.rerun()
 
 col_sel, col_info = st.columns([1, 2])
 with col_sel:
     options = config.AVAILABLE_SYMBOLS.copy()
     if st.session_state.symbol not in options:
         options.append(st.session_state.symbol)
-    chosen = st.selectbox("Cripto en seguimiento", options, index=options.index(st.session_state.symbol))
-    if chosen != st.session_state.symbol:
-        st.session_state.symbol = chosen
+    chosen = st.selectbox(
+        "Cripto en seguimiento", options, index=options.index(st.session_state.symbol),
+        disabled=st.session_state.scan_mode,
+    )
+    if chosen != st.session_state.symbol and not st.session_state.scan_mode:
+        set_symbol(chosen)
 
 with col_info:
     estado = "🟢 Activas" if st.session_state.notifications_enabled else "🔴 Pausadas"
     st.caption(
         f"Alertas Telegram: {estado} · Timeframe {config.INTERVAL} · "
-        f"Refresco cada {config.REFRESH_SECONDS}s · Última actualización: {time.strftime('%H:%M:%S')}"
+        f"Refresco cada {_refresh_ms // 1000}s{' (acelerado, hay operaciones abiertas)' if _open_ops_count else ''} · "
+        f"Última actualización: {time.strftime('%H:%M:%S')}"
     )
-    st.caption("Comandos por Telegram: /start /stop /status /now /symbol PAR")
+    st.caption("Comandos por Telegram: /start /stop /status /now /symbol PAR /favorites /operations")
 
 symbol = st.session_state.symbol
 
@@ -155,6 +355,12 @@ with col1:
         fig_delta.update_layout(height=180, margin=dict(l=10, r=10, t=10, b=10), title="Delta (compra - venta)")
         st.plotly_chart(fig_delta, use_container_width=True)
 
+    fig_adx = go.Figure()
+    fig_adx.add_trace(go.Scatter(x=df["open_time"], y=df["adx14"], name="ADX"))
+    fig_adx.add_hline(y=25, line_dash="dash", line_color="gray")
+    fig_adx.update_layout(height=150, margin=dict(l=10, r=10, t=10, b=10), title="ADX (fuerza de tendencia, >25 = fuerte)")
+    st.plotly_chart(fig_adx, use_container_width=True)
+
 with col2:
     st.metric("Precio actual", f"${result['live_price']:,.2f}")
     if result["price"] != result["live_price"]:
@@ -175,6 +381,11 @@ with col2:
     st.write(f"**Delta:** {result['delta_state']} ({result['delta_pct']}%)")
     if result.get("trend_1d"):
         st.write(f"**Tendencia 1D:** {result['trend_1d']}")
+    st.write(f"**ADX:** {result['adx']} ({result['trend_strength']})")
+    if result["trend_strength"] == "lateral/débil":
+        st.caption("⚠️ Mercado sin tendencia clara -- las señales de MACD/EMA son menos fiables ahora.")
+    if result.get("pattern"):
+        st.write(f"**Patrón de velas:** envolvente {result['pattern']}")
     if result["support"]:
         st.write(f"**Soporte cercano:** {result['support']:,.2f}")
     if result["resistance"]:
@@ -193,10 +404,19 @@ with col2:
         st.markdown("**Valores para Quantfury (toca el ícono de copiar en cada uno):**")
         st.caption("Precio de entrada")
         st.code(f"{result['entry']:.2f}", language=None)
-        st.caption("Stop loss")
+        st.caption("Stop loss" + (" (ampliado por volatilidad ATR)" if result.get("stop_widened") else ""))
         st.code(f"{result['stop']:.2f}", language=None)
         st.caption("Take profit")
         st.code(f"{result['tp']:.2f}", language=None)
+
+        open_ops_this_symbol = [o for o in db.get_open_operations() if o["symbol"] == symbol]
+        if open_ops_this_symbol:
+            st.info(f"Ya tienes una operación de {symbol} en seguimiento.")
+        else:
+            if st.button("✅ Aceptar y dar seguimiento a esta operación"):
+                db.create_operation(symbol, signal, result["entry"], result["stop"], result["tp"])
+                st.success("Operación en seguimiento. Se revisa automáticamente cada refresco.")
+                st.rerun()
 
         st.markdown("**Calculadora de ganancia/pérdida**")
         cap_col, inv_col = st.columns(2)
@@ -206,12 +426,12 @@ with col2:
             investment = st.number_input("Monto a invertir ($)", min_value=1.0, value=500.0, step=50.0, key="investment_input")
 
         entry, stop, tp = result["entry"], result["stop"], result["tp"]
-        qty = investment / entry  # cantidad de la cripto que representa ese monto invertido
+        qty = investment / entry
 
         if signal == "COMPRA":
             profit_usd = qty * (tp - entry)
             loss_usd = qty * (entry - stop)
-        else:  # VENTA
+        else:
             profit_usd = qty * (entry - tp)
             loss_usd = qty * (stop - entry)
 
@@ -231,9 +451,7 @@ with col2:
         if implied_leverage > 1:
             st.warning(
                 f"⚠️ Este monto implica un apalancamiento aproximado de **{implied_leverage:.1f}x** "
-                f"sobre tu capital de ${capital:,.2f}. A mayor apalancamiento, mayor es también "
-                f"el riesgo de que una pérdida consuma tu margen antes de llegar al stop loss "
-                f"planeado (liquidación). Verifica siempre el apalancamiento real que usa tu bróker."
+                f"sobre tu capital de ${capital:,.2f}. Verifica siempre el apalancamiento real que usa tu bróker."
             )
 
         if (
@@ -242,16 +460,7 @@ with col2:
             and st.session_state.notifications_enabled
             and TOKEN and CHAT_ID
         ):
-            msg = (
-                f"*{signal}* señal CONFIRMADA en *{symbol}* ({config.INTERVAL})\n"
-                f"Precio: ${result['price']:,.2f}\n"
-                f"Entrada: ${result['entry']:,.2f}\n"
-                f"Stop: ${result['stop']:,.2f}\n"
-                f"TP: ${result['tp']:,.2f}\n"
-                f"A favor: {', '.join(result['reasons'])}\n"
-                + (f"En conflicto: {', '.join(result['conflict_reasons'])}" if result['conflict_reasons'] else "")
-            )
-            ok, info = send_telegram_message(TOKEN, CHAT_ID, msg)
+            ok, info = send_signal_alert(symbol, result)
             if ok:
                 st.session_state.last_alert = alert_key
                 st.toast(f"Alerta enviada a Telegram ({symbol})")
@@ -261,10 +470,38 @@ with col2:
         st.info("Sin señal confirmada — mercado en zona de espera.")
         st.session_state.last_alert = alert_key
 
+# --- Operaciones en seguimiento ---
+open_ops = db.get_open_operations()
+if open_ops:
+    st.divider()
+    st.subheader("📍 Operaciones en seguimiento")
+    for op in open_ops:
+        try:
+            _, op_result = get_data_and_signal(op["symbol"])
+            live = op_result["live_price"]
+            if op["direction"] == "COMPRA":
+                progress = (live - op["entry"]) / (op["tp"] - op["entry"]) if op["tp"] != op["entry"] else 0
+            else:
+                progress = (op["entry"] - live) / (op["entry"] - op["tp"]) if op["entry"] != op["tp"] else 0
+            progress = max(0, min(1, progress))
+            st.write(f"**{op['symbol']} {op['direction']}** · entrada ${op['entry']:,.2f} · precio actual ${live:,.2f}")
+            st.progress(progress, text=f"{progress*100:.0f}% hacia el take profit")
+        except Exception:
+            st.write(f"{op['symbol']} {op['direction']} (no se pudo actualizar precio)")
+
+history = db.get_operation_history(10)
+if history:
+    with st.expander(f"📜 Historial ({len(history)} operaciones cerradas recientes)"):
+        wins = sum(1 for h in history if h["pnl_pct"] and h["pnl_pct"] > 0)
+        st.caption(f"{wins}/{len(history)} operaciones ganadoras en este historial")
+        for h in history:
+            emoji = "🟢" if h["pnl_pct"] and h["pnl_pct"] > 0 else "🔴"
+            st.write(f"{emoji} {h['symbol']} {h['direction']} · {h['outcome']} · {h['pnl_pct']:+.2f}%")
+
 st.divider()
 st.caption(
     "⚠️ Herramienta de apoyo técnico, no es asesoría financiera. "
-    "Las señales combinan MACD, RSI, PVT, delta aproximado y niveles de "
+    "Las señales combinan MACD, RSI, PVT, delta, ADX, patrón de velas y niveles de "
     "soporte/resistencia, calculadas solo sobre velas cerradas — no garantizan "
     "resultados. Define siempre tu propia gestión de riesgo."
 )

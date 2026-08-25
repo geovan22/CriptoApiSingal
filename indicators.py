@@ -55,6 +55,73 @@ def pvt(close: pd.Series, volume: pd.Series) -> pd.Series:
     return pvt_raw
 
 
+def true_range(df: pd.DataFrame) -> pd.Series:
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr
+
+
+def atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    """Average True Range -- mide la volatilidad reciente en unidades de precio."""
+    tr = true_range(df)
+    return tr.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+
+
+def adx(df: pd.DataFrame, length: int = 14):
+    """
+    ADX (Average Directional Index, Wilder) -- mide qué tan FUERTE es la
+    tendencia, sin importar la dirección. No es un indicador de compra/venta
+    por sí solo: sirve para saber si vale la pena confiar en MACD/EMA en
+    este momento (tendencia real) o si el mercado está lateral (ADX < 20),
+    donde los cruces de medias suelen dar señales falsas.
+    Devuelve (adx, plus_di, minus_di).
+    """
+    high, low = df["high"], df["low"]
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    plus_dm = pd.Series(plus_dm, index=df.index)
+    minus_dm = pd.Series(minus_dm, index=df.index)
+
+    tr = true_range(df)
+    tr_smooth = tr.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+    plus_dm_smooth = plus_dm.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+    minus_dm_smooth = minus_dm.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+
+    plus_di = 100 * (plus_dm_smooth / tr_smooth.replace(0, np.nan))
+    minus_di = 100 * (minus_dm_smooth / tr_smooth.replace(0, np.nan))
+
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx_val = dx.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+    return adx_val.fillna(0), plus_di.fillna(0), minus_di.fillna(0)
+
+
+def detect_engulfing(df: pd.DataFrame) -> str:
+    """
+    Patrón de velas envolventes (clásico, del ebook de patrones de gráfico):
+    compara las 2 últimas velas de df. Devuelve 'alcista', 'bajista', o None.
+    """
+    if len(df) < 2:
+        return None
+    prev, last = df.iloc[-2], df.iloc[-1]
+    prev_bearish = prev["close"] < prev["open"]
+    prev_bullish = prev["close"] > prev["open"]
+    last_bullish = last["close"] > last["open"]
+    last_bearish = last["close"] < last["open"]
+
+    if prev_bearish and last_bullish and last["open"] <= prev["close"] and last["close"] >= prev["open"]:
+        return "alcista"
+    if prev_bullish and last_bearish and last["open"] >= prev["close"] and last["close"] <= prev["open"]:
+        return "bajista"
+    return None
+
+
 def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """df debe tener columnas: open, high, low, close, volume"""
     df = df.copy()
@@ -65,4 +132,6 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["rsi14"] = rsi(df["close"], 14)
     df["stoch_k"], df["stoch_d"] = stoch_rsi(df["close"])
     df["pvt"] = pvt(df["close"], df["volume"])
+    df["atr14"] = atr(df, 14)
+    df["adx14"], df["plus_di"], df["minus_di"] = adx(df, 14)
     return df
