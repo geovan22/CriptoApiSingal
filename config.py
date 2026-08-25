@@ -51,6 +51,20 @@ AVAILABLE_SYMBOLS = [
 # consistente con el análisis manual que ya veníamos haciendo en el chat)
 INTERVAL = "4h"
 
+# --- Gestión de riesgo ---
+# Distancia máxima permitida para el stop loss, como % del precio de entrada.
+# Sin este límite, el stop se calcula solo con el soporte/resistencia más
+# cercano, que en criptos volátiles puede quedar MUY lejos (ej. 14%) --
+# peligroso si operas con apalancamiento, porque te pueden liquidar mucho
+# antes de llegar a ese stop. 0.04 = 4% es un valor conservador razonable
+# para trading apalancado; ajústalo según tu tolerancia al riesgo.
+MAX_STOP_PCT = 0.04
+
+# Ratio riesgo/beneficio mínimo aceptable. Si después de aplicar el tope
+# de arriba el TP queda muy cerca comparado con el riesgo, la señal se
+# marca como de baja calidad en vez de "confirmada" sin más.
+MIN_RR_RATIO = 1.0
+
 # Cada cuánto se refresca el dashboard (segundos)
 REFRESH_SECONDS = 60
 

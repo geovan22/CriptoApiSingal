@@ -26,6 +26,14 @@ import pandas as pd
 import numpy as np
 from indicators import detect_engulfing
 
+try:
+    import config
+    MAX_STOP_PCT = getattr(config, "MAX_STOP_PCT", 0.04)
+    MIN_RR_RATIO = getattr(config, "MIN_RR_RATIO", 1.0)
+except Exception:
+    MAX_STOP_PCT = 0.04
+    MIN_RR_RATIO = 1.0
+
 WEIGHTS = {
     "macd": 1.0,
     "rsi": 1.0,
@@ -271,6 +279,7 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
 
     entry = stop = tp = None
     stop_widened = False
+    stop_capped = False
     if signal == "COMPRA":
         entry = price
         stop = near_support * 0.997 if near_support else price * 0.98
@@ -278,6 +287,11 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
         if atr_val and (entry - stop) < atr_val:
             stop = entry - atr_val
             stop_widened = True
+        max_stop_distance = entry * MAX_STOP_PCT
+        if (entry - stop) > max_stop_distance:
+            stop = entry - max_stop_distance
+            stop_capped = True
+            stop_widened = False
     elif signal == "VENTA":
         entry = price
         stop = near_resistance * 1.003 if near_resistance else price * 1.02
@@ -285,6 +299,20 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
         if atr_val and (stop - entry) < atr_val:
             stop = entry + atr_val
             stop_widened = True
+        max_stop_distance = entry * MAX_STOP_PCT
+        if (stop - entry) > max_stop_distance:
+            stop = entry + max_stop_distance
+            stop_capped = True
+            stop_widened = False
+
+    rr_ratio = None
+    low_quality_rr = False
+    if entry is not None and stop is not None and tp is not None:
+        risk = abs(entry - stop)
+        reward = abs(tp - entry)
+        if risk > 0:
+            rr_ratio = reward / risk
+            low_quality_rr = rr_ratio < MIN_RR_RATIO
 
     return {
         "signal": signal,
@@ -312,4 +340,7 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
         "stop": stop,
         "tp": tp,
         "stop_widened": stop_widened,
+        "stop_capped": stop_capped,
+        "rr_ratio": round(rr_ratio, 2) if rr_ratio is not None else None,
+        "low_quality_rr": low_quality_rr,
     }

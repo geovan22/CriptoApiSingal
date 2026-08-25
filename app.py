@@ -405,7 +405,12 @@ with col2:
         st.markdown("**Valores para Quantfury (toca el ícono de copiar en cada uno):**")
         st.caption("Precio de entrada")
         st.code(f"{format_price(result['entry'])}", language=None)
-        st.caption("Stop loss" + (" (ampliado por volatilidad ATR)" if result.get("stop_widened") else ""))
+        stop_note = ""
+        if result.get("stop_capped"):
+            stop_note = f" (limitado a {config.MAX_STOP_PCT*100:.0f}% máx. de riesgo)"
+        elif result.get("stop_widened"):
+            stop_note = " (ampliado por volatilidad ATR)"
+        st.caption("Stop loss" + stop_note)
         st.code(f"{format_price(result['stop'])}", language=None)
         st.caption("Take profit")
         st.code(f"{format_price(result['tp'])}", language=None)
@@ -448,6 +453,13 @@ with col2:
             st.metric("Si toca Stop Loss", f"-${loss_usd:,.2f}", f"{-loss_pct:.1f}%", delta_color="inverse")
 
         st.caption(f"Cantidad: {qty:.6f} {symbol.replace('USDT','')} · Ratio riesgo/beneficio: 1:{rr_ratio:.2f}")
+
+        if result.get("low_quality_rr"):
+            st.warning(
+                f"⚠️ El ratio riesgo/beneficio de esta señal ({result['rr_ratio']}:1) está por debajo "
+                f"de lo recomendado (mínimo {config.MIN_RR_RATIO}:1). Aunque el stop ya está limitado, "
+                f"el take profit está relativamente cerca -- considera si vale la pena esta operación."
+            )
 
         if implied_leverage > 1:
             st.warning(
