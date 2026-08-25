@@ -53,12 +53,19 @@ INTERVAL = "4h"
 
 # --- Gestión de riesgo ---
 # Distancia máxima permitida para el stop loss, como % del precio de entrada.
-# Sin este límite, el stop se calcula solo con el soporte/resistencia más
-# cercano, que en criptos volátiles puede quedar MUY lejos (ej. 14%) --
-# peligroso si operas con apalancamiento, porque te pueden liquidar mucho
-# antes de llegar a ese stop. 0.04 = 4% es un valor conservador razonable
-# para trading apalancado; ajústalo según tu tolerancia al riesgo.
-MAX_STOP_PCT = 0.04
+#
+# IMPORTANTE: esto es una RED DE SEGURIDAD EXTREMA, no el control principal
+# de riesgo. El control principal es el "Riesgo por operación (%)" de la
+# calculadora, que ajusta cuánto DINERO inviertes según qué tan lejos esté
+# el stop -- eso ya limita tu pérdida en dólares sin importar el % de precio.
+#
+# Antes este valor estaba en 4%, forzando el mismo stop apretado para BTC
+# (lento) y para altcoins volátiles (POL, NEAR). El backtest mostró que
+# eso perjudicaba a BTC: sacaba operaciones por ruido normal antes de que
+# el movimiento se desarrollara (profit factor cayó de 1.58 a 0.99). Con
+# el position sizing por riesgo ya activo, un stop más lejano solo reduce
+# el monto invertido -- no hace falta forzarlo a estar cerca.
+MAX_STOP_PCT = 0.10
 
 # Ratio riesgo/beneficio mínimo aceptable. Si después de aplicar el tope
 # de arriba el TP queda muy cerca comparado con el riesgo, la señal se
