@@ -179,6 +179,11 @@ def render_backtest_panel():
             m2.metric("Expectativa/operación", f"{pooled_stats['expectancy_pct']:+.2f}%")
             m3.metric("Profit factor", pooled_stats['profit_factor'] if pooled_stats['profit_factor'] else "∞")
             m4.metric("Drawdown máx.", f"{pooled_stats['max_drawdown_pct']:.2f}%")
+            st.caption(
+                "⚠️ El drawdown combinado asume una sola cuenta rotando capital completo entre "
+                "operaciones en orden cronológico -- simplificación razonable, pero en la vida real "
+                "varias de estas operaciones (de distintos símbolos) podrían solaparse en el tiempo."
+            )
 
             st.markdown("**📐 Interpretación estadística (muestra combinada)**")
             _render_interpretation(pooled_stats)

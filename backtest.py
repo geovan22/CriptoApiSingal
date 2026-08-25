@@ -234,7 +234,13 @@ def summarize_trades(trades: list) -> dict:
     sum_losses = sum(t["pnl_pct"] for t in losses)
     profit_factor = (sum(t["pnl_pct"] for t in wins) / abs(sum_losses)) if losses and sum_losses != 0 else None
 
-    cum = np.cumsum([t["pnl_pct"] for t in trades])
+    # IMPORTANTE: ordenar cronológicamente antes de calcular la curva
+    # acumulada. En un backtest de un solo símbolo ya vienen en orden, pero
+    # en el análisis multi-símbolo se concatenan símbolo por símbolo (todo
+    # BTC, luego todo ETH...) -- sin este ordenamiento, el drawdown sale
+    # sin sentido (puede superar el 100%, algo imposible en la realidad).
+    trades_sorted = sorted(trades, key=lambda t: t["entry_time"])
+    cum = np.cumsum([t["pnl_pct"] for t in trades_sorted])
     peak = np.maximum.accumulate(cum)
     drawdown = cum - peak
     max_drawdown = float(drawdown.min()) if len(drawdown) else 0.0
