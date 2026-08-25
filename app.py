@@ -50,6 +50,7 @@ run_scan_mode()
 
 # --- UI ---
 st.title("📊 Crypto Signal Dashboard")
+st.caption("🔧 build-check: v-diag-001")
 
 tab_signal, tab_favorites, tab_backtest, tab_backup = st.tabs(
     ["📈 Señal", "⭐ Favoritos", "🧪 Backtest", "💾 Historial/Respaldo"]
