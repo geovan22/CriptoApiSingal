@@ -6,6 +6,7 @@ import streamlit as st
 import config
 import db
 import backtest
+import stats_helper
 from price_format import format_price
 
 
@@ -30,6 +31,27 @@ def _load_result_from_db():
         return data["symbol"], restored_trades, data["stats"]
     except Exception:
         return None
+
+
+def _render_interpretation(stats: dict, label: str = ""):
+    interp = stats_helper.interpret_backtest(stats)
+    if interp.get("n_trades", 0) == 0:
+        return
+    prefix = f"**{label}** — " if label else ""
+    st.caption(
+        f"{prefix}Win rate observado {interp['win_rate_pct']}% · "
+        f"tu win rate REAL probablemente está entre {interp['win_rate_ci_low']}% y "
+        f"{interp['win_rate_ci_high']}% (95% de confianza, n={interp['n_trades']})."
+    )
+    if interp.get("breakeven_win_rate_pct") is not None:
+        be = interp["breakeven_win_rate_pct"]
+        verdict = interp["verdict"]
+        if verdict == "por_encima_equilibrio":
+            st.success(f"✅ Con esta muestra, todo el intervalo de confianza queda por ENCIMA del {be}% que necesitas para no perder dinero -- señal alentadora, aunque la muestra sigue siendo chica.")
+        elif verdict == "por_debajo_equilibrio":
+            st.error(f"🔴 Con esta muestra, todo el intervalo de confianza queda por DEBAJO del {be}% que necesitas para no perder dinero -- señal preocupante.")
+        else:
+            st.warning(f"⚪ Indeterminado: tu intervalo de confianza cruza el {be}% que necesitas para no perder dinero -- con esta cantidad de datos, NO se puede afirmar si el sistema tiene ventaja o no. Necesitarías ~{interp['required_n_for_10pct_margin']} operaciones para saberlo con más certeza (tienes {interp['n_trades']}).")
 
 
 def render_backtest_panel():
@@ -88,6 +110,9 @@ def render_backtest_panel():
             if bt_stats["n_trades"] < 20:
                 st.info("Con menos de 20 operaciones la muestra es chica -- prueba con más velas históricas antes de sacar conclusiones firmes.")
 
+            st.markdown("**📐 Interpretación estadística**")
+            _render_interpretation(bt_stats)
+
             confluence = backtest.summarize_by_confluence(bt_trades)
             if confluence:
                 st.markdown("**Desglose por nivel de confluencia** (¿más razones a favor = mejor resultado?)")
@@ -143,6 +168,7 @@ def render_backtest_panel():
                 st.metric("Win rate", f"{train_stats['win_rate']}%")
                 st.metric("Expectativa/op.", f"{train_stats['expectancy_pct']:+.2f}%")
                 st.caption(f"{train_stats['n_trades']} operaciones · PF {train_stats['profit_factor'] or '∞'}")
+                _render_interpretation(train_stats)
         with oc2:
             st.markdown("**TEST** (fuera de muestra)")
             if test_stats.get("n_trades", 0) == 0:
@@ -151,17 +177,30 @@ def render_backtest_panel():
                 st.metric("Win rate", f"{test_stats['win_rate']}%")
                 st.metric("Expectativa/op.", f"{test_stats['expectancy_pct']:+.2f}%")
                 st.caption(f"{test_stats['n_trades']} operaciones · PF {test_stats['profit_factor'] or '∞'}")
+                _render_interpretation(test_stats)
 
         if train_stats.get("n_trades", 0) >= 5 and test_stats.get("n_trades", 0) >= 5:
             train_exp = train_stats["expectancy_pct"]
             test_exp = test_stats["expectancy_pct"]
-            if test_exp < 0 and train_exp > 0:
+            if train_exp <= 0 and test_exp <= 0:
+                st.error(
+                    "⚠️ El sistema perdió dinero en AMBOS tramos (train y test) -- no es un problema de "
+                    "sobreajuste, es que no muestra ventaja estadística en este periodo reciente para "
+                    f"este símbolo. Expectativa train {train_exp:+.2f}% / test {test_exp:+.2f}%."
+                )
+            elif test_exp < 0 and train_exp > 0:
                 st.error(
                     "⚠️ El sistema fue rentable en el tramo que ya observamos (train) pero perdió dinero "
                     "en el tramo nunca visto (test) -- señal clásica de sobreajuste. Los parámetros "
                     "actuales podrían estar ajustados al ruido del tramo que miramos, no a una ventaja real."
                 )
-            elif test_exp < train_exp * 0.3 and train_exp > 0:
+            elif train_exp <= 0 and test_exp > 0:
+                st.info(
+                    "ℹ️ Train fue negativo pero test resultó positivo -- con muestras tan chicas esto es "
+                    "más probable que sea variación normal que una mejora real. No es evidencia sólida "
+                    "en ningún sentido todavía."
+                )
+            elif test_exp < train_exp * 0.3:
                 st.warning(
                     "⚠️ El rendimiento en test es considerablemente más débil que en train -- vale la "
                     "pena tomar los resultados de train con cautela y no seguir ajustando parámetros "
