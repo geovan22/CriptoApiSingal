@@ -30,7 +30,7 @@ def get_klines(symbol: str = "BTCUSDT", interval: str = "4h", limit: int = 300) 
     last_err = None
     for url in ENDPOINTS:
         try:
-            resp = requests.get(url, params=params, timeout=10)
+            resp = requests.get(url, params=params, timeout=6)
             resp.raise_for_status()
             data = resp.json()
             df = pd.DataFrame(data, columns=COLUMNS)

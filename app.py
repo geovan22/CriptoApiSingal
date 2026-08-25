@@ -27,13 +27,23 @@ TOKEN = config.TELEGRAM_TOKEN
 CHAT_ID = config.TELEGRAM_CHAT_ID
 
 
+@st.cache_data(ttl=55, show_spinner=False)
+def cached_klines(symbol: str, interval: str, limit: int):
+    return get_klines(symbol, interval, limit)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)  # la tendencia diaria casi no cambia, se cachea 1h
+def cached_daily_trend(symbol: str):
+    df_1d = cached_klines(symbol, "1d", 100)
+    df_1d = add_all_indicators(df_1d)
+    return get_daily_trend(df_1d)
+
+
 def get_data_and_signal(symbol: str):
-    df = get_klines(symbol, config.INTERVAL, limit=300)
+    df = cached_klines(symbol, config.INTERVAL, 300)
     df = add_all_indicators(df)
     try:
-        df_1d = get_klines(symbol, "1d", limit=100)
-        df_1d = add_all_indicators(df_1d)
-        trend_1d = get_daily_trend(df_1d)
+        trend_1d = cached_daily_trend(symbol)
     except Exception:
         trend_1d = None
     result = evaluate_signal(df, trend_1d=trend_1d)
@@ -102,7 +112,8 @@ with col_info:
 symbol = st.session_state.symbol
 
 try:
-    df, result = get_data_and_signal(symbol)
+    with st.spinner(f"Cargando datos de {symbol}..."):
+        df, result = get_data_and_signal(symbol)
 except Exception as e:
     st.error(f"Error obteniendo datos de {symbol}: {e}")
     st.stop()
