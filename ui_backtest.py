@@ -139,8 +139,9 @@ def render_backtest_panel():
     )
     multi_symbols = st.multiselect(
         "Símbolos a incluir", config.AVAILABLE_SYMBOLS,
-        default=config.AVAILABLE_SYMBOLS[:8], key="multi_symbols",
+        default=config.AVAILABLE_SYMBOLS[:15], key="multi_symbols",
     )
+    st.caption("Con 15 símbolos puede tardar ~2-3 minutos. Se ve el progreso mientras corre.")
     multi_limit = st.slider("Velas históricas por símbolo", 300, 1000, 700, step=50, key="multi_limit")
     run_multi = st.button(f"📊 Analizar {len(multi_symbols)} símbolos combinados")
 

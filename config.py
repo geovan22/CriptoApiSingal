@@ -45,6 +45,10 @@ AVAILABLE_SYMBOLS = [
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
     "LTCUSDT", "TRXUSDT", "TONUSDT", "NEARUSDT", "SUIUSDT",
     "APTUSDT", "ARBUSDT", "OPUSDT", "POLUSDT", "BCHUSDT",
+    # Ampliación para el análisis combinado (más muestra, más diversidad):
+    "ATOMUSDT", "ICPUSDT", "FILUSDT", "INJUSDT", "RENDERUSDT",
+    "SHIBUSDT", "PEPEUSDT",  # estos dos son mucho más volátiles -- útil
+    # para ver si la ventaja observada en ADA/SOL se relaciona con volatilidad.
 ]
 
 # Temporalidad (4h: buen balance entre calidad de señal y ruido,
