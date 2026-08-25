@@ -108,6 +108,43 @@ def run_backtest(symbol: str, interval: str = "4h", limit: int = 1000, warmup: i
     return _simulate(df, symbol, warmup)
 
 
+def run_multi_symbol_backtest(symbols: list, interval: str = "4h", limit: int = 700,
+                               warmup: int = 210, progress_callback=None):
+    """
+    Corre run_backtest() en varios símbolos y junta TODAS las operaciones
+    en una sola muestra -- llega más rápido al mínimo de ~100 operaciones
+    que se necesita para conclusiones estadísticas confiables, en vez de
+    esperar semanas a que un solo símbolo acumule suficientes.
+
+    CAVEAT importante: las criptos suelen moverse correlacionadas entre sí
+    (sobre todo altcoins con BTC), así que estas operaciones no son
+    completamente independientes entre símbolos -- el tamaño de muestra
+    "efectivo" es algo menor al número total de operaciones combinadas.
+    Sigue siendo mucho mejor que mirar un solo símbolo con 15 operaciones.
+
+    progress_callback: función opcional callback(symbol, i, total) para
+    mostrar progreso en la UI mientras corre (puede tardar 1-2 minutos).
+
+    Devuelve (all_trades, per_symbol_stats: dict, pooled_stats, errors: dict)
+    """
+    all_trades = []
+    per_symbol_stats = {}
+    errors = {}
+
+    for i, symbol in enumerate(symbols):
+        if progress_callback:
+            progress_callback(symbol, i, len(symbols))
+        try:
+            trades, stats = run_backtest(symbol, interval, limit, warmup)
+            per_symbol_stats[symbol] = stats
+            all_trades.extend(trades)
+        except Exception as e:
+            errors[symbol] = str(e)
+
+    pooled_stats = summarize_trades(all_trades)
+    return all_trades, per_symbol_stats, pooled_stats, errors
+
+
 def run_out_of_sample_validation(symbol: str, interval: str = "4h", total_limit: int = 1400,
                                   split_ratio: float = 0.6, train_warmup: int = 210, test_buffer: int = 150):
     """

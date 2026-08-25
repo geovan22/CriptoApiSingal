@@ -129,6 +129,68 @@ def render_backtest_panel():
                     )
 
     st.divider()
+    st.markdown("### 📊 Análisis combinado (todos los símbolos)")
+    st.caption(
+        "Corre el backtest en varios símbolos a la vez y junta TODAS las operaciones en una "
+        "sola muestra -- llega mucho más rápido al mínimo de ~100 operaciones que hace falta "
+        "para conclusiones confiables, en vez de esperar semanas con un solo símbolo. "
+        "Nota: las criptos suelen moverse correlacionadas entre sí, así que esto no es una "
+        "muestra perfectamente independiente -- pero sigue siendo mejor que ver un símbolo solo."
+    )
+    multi_symbols = st.multiselect(
+        "Símbolos a incluir", config.AVAILABLE_SYMBOLS,
+        default=config.AVAILABLE_SYMBOLS[:8], key="multi_symbols",
+    )
+    multi_limit = st.slider("Velas históricas por símbolo", 300, 1000, 700, step=50, key="multi_limit")
+    run_multi = st.button(f"📊 Analizar {len(multi_symbols)} símbolos combinados")
+
+    if run_multi and multi_symbols:
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+
+        def _update_progress(symbol, i, total):
+            status_text.text(f"Analizando {symbol}... ({i + 1}/{total})")
+            progress_bar.progress((i + 1) / total)
+
+        try:
+            all_trades, per_symbol, pooled_stats, errors = backtest.run_multi_symbol_backtest(
+                multi_symbols, config.INTERVAL, limit=multi_limit, progress_callback=_update_progress
+            )
+            st.session_state["multi_result"] = (all_trades, per_symbol, pooled_stats, errors)
+        except Exception as e:
+            st.error(f"No se pudo correr el análisis combinado: {e}")
+        finally:
+            status_text.empty()
+            progress_bar.empty()
+
+    if "multi_result" in st.session_state:
+        all_trades, per_symbol, pooled_stats, errors = st.session_state["multi_result"]
+
+        if errors:
+            st.warning(f"No se pudieron analizar {len(errors)} símbolo(s): {', '.join(errors.keys())}")
+
+        if pooled_stats.get("n_trades", 0) == 0:
+            st.warning("Ningún símbolo generó operaciones confirmadas en este rango.")
+        else:
+            st.write(f"**Resultado combinado: {pooled_stats['n_trades']} operaciones de {len(per_symbol)} símbolos**")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Win rate", f"{pooled_stats['win_rate']}%")
+            m2.metric("Expectativa/operación", f"{pooled_stats['expectancy_pct']:+.2f}%")
+            m3.metric("Profit factor", pooled_stats['profit_factor'] if pooled_stats['profit_factor'] else "∞")
+            m4.metric("Drawdown máx.", f"{pooled_stats['max_drawdown_pct']:.2f}%")
+
+            st.markdown("**📐 Interpretación estadística (muestra combinada)**")
+            _render_interpretation(pooled_stats)
+
+            with st.expander(f"Ver desglose por símbolo ({len(per_symbol)})"):
+                for sym, s in sorted(per_symbol.items(), key=lambda kv: kv[1].get("n_trades", 0), reverse=True):
+                    if s.get("n_trades", 0) == 0:
+                        st.write(f"- {sym}: sin operaciones")
+                    else:
+                        emoji = "🟢" if s["expectancy_pct"] > 0 else "🔴"
+                        st.write(f"{emoji} **{sym}**: {s['n_trades']} op. · win rate {s['win_rate']}% · expectativa {s['expectancy_pct']:+.2f}%")
+
+    st.divider()
     st.markdown("### 🔬 Validación fuera de muestra (walk-forward)")
     st.caption(
         "Divide el histórico en dos partes cronológicas: la primera mitad (train) es la que hemos "
