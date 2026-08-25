@@ -68,21 +68,23 @@ def interpret_backtest(stats: dict) -> dict:
     win_rate_pct = stats["win_rate"]
     wins = round(win_rate_pct / 100 * n)
     ci_low, ci_high = wilson_interval(wins, n)
+    achieved_margin_pct = (ci_high - ci_low) / 2 * 100  # margen real ya logrado con esta n
 
     be = breakeven_win_rate(stats.get("avg_win_pct", 0), stats.get("avg_loss_pct", 0))
     be_inside_ci = be is not None and ci_low <= be <= ci_high
 
     if be is not None:
         if ci_low > be:
-            verdict = "por_encima_equilibrio"  # todo el intervalo por encima del breakeven -> señal alentadora
+            verdict = "por_encima_equilibrio"
         elif ci_high < be:
-            verdict = "por_debajo_equilibrio"  # todo el intervalo por debajo -> señal preocupante
+            verdict = "por_debajo_equilibrio"
         else:
-            verdict = "indeterminado"  # el intervalo cruza el breakeven -> no se puede afirmar nada todavía
+            verdict = "indeterminado"
     else:
         verdict = "sin_datos"
 
-    required_n = required_n_for_margin(p=win_rate_pct / 100, margin=0.10)
+    required_n_10 = required_n_for_margin(p=win_rate_pct / 100, margin=0.10)
+    required_n_5 = required_n_for_margin(p=win_rate_pct / 100, margin=0.05)
 
     return {
         "n_trades": n,
@@ -90,8 +92,11 @@ def interpret_backtest(stats: dict) -> dict:
         "win_rate_pct": win_rate_pct,
         "win_rate_ci_low": round(ci_low * 100, 1),
         "win_rate_ci_high": round(ci_high * 100, 1),
+        "achieved_margin_pct": round(achieved_margin_pct, 1),
         "breakeven_win_rate_pct": round(be * 100, 1) if be is not None else None,
         "be_inside_ci": be_inside_ci,
         "verdict": verdict,
-        "required_n_for_10pct_margin": required_n,
+        "required_n_for_10pct_margin": required_n_10,
+        "required_n_for_5pct_margin": required_n_5,
+        "already_reached_10pct": n >= required_n_10,
     }
