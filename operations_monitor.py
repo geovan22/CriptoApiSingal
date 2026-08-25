@@ -1,6 +1,6 @@
 """
 Revisa operaciones en seguimiento (cierra solas al tocar TP/stop, avisa si
-el análisis se revierte) y el modo escaneo de favoritos.
+el análisis se revierte) y la watchlist de favoritos (solo informativa).
 """
 import streamlit as st
 
@@ -10,7 +10,6 @@ import risk_rules
 from price_format import format_price
 from telegram_alert import send_telegram_message
 from signal_service import get_data_and_signal
-from app_state import set_symbol
 from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
 
 
@@ -78,33 +77,43 @@ def check_open_operations(open_ops: list):
                     )
 
 
-def run_scan_mode():
+def get_confirmed_favorites_signals() -> list:
     """
-    Si el modo escaneo está activo, revisa los favoritos y cambia
-    automáticamente al primero que tenga una señal confirmada.
+    Revisa TODOS los favoritos y devuelve solo los que tienen una señal
+    CONFIRMADA (COMPRA o VENTA, sin advertencias, sin estar en formación,
+    sin estar filtrada por ADX/R:B). Es puramente informativo -- no cambia
+    el símbolo en seguimiento ni navega a ningún lado. El usuario decide
+    manualmente cuál revisar a fondo.
     """
-    if not st.session_state.scan_mode:
-        return
-
-    favorites = db.get_favorites()
-    found = None
-    for fav_symbol in favorites:
+    results = []
+    for fav_symbol in db.get_favorites():
         try:
             _, fav_result = get_data_and_signal(fav_symbol)
         except Exception:
             continue
         if fav_result["signal"] in ("COMPRA", "VENTA") and fav_result["status"] == "confirmada":
-            in_cooldown, _ = risk_rules.check_cooldown(fav_symbol, fav_result["signal"])
-            if in_cooldown:
-                continue
-            found = (fav_symbol, fav_result)
-            break
+            results.append({"symbol": fav_symbol, "signal": fav_result["signal"], "result": fav_result})
+    return results
 
-    if found:
-        fav_symbol, fav_result = found
-        set_symbol(fav_symbol)
-        alert_key = f"{fav_symbol}:{fav_result['signal']}"
-        if st.session_state.last_alert != alert_key and st.session_state.notifications_enabled and TOKEN and CHAT_ID:
-            ok, _ = send_signal_alert(fav_symbol, fav_result)
-            if ok:
-                st.session_state.last_alert = alert_key
+
+def notify_favorites_signals(confirmed_list: list):
+    """
+    Si el usuario activó las notificaciones de favoritos, manda una alerta
+    de Telegram por cada señal nueva de la lista (sin repetir la misma
+    mientras siga vigente). No cambia el símbolo en seguimiento.
+    """
+    if not st.session_state.get("notify_favorites") or not (TOKEN and CHAT_ID) or not st.session_state.notifications_enabled:
+        return
+    if "sent_favorite_alerts" not in st.session_state:
+        st.session_state.sent_favorite_alerts = set()
+
+    for item in confirmed_list:
+        alert_key = f"{item['symbol']}:{item['signal']}"
+        if alert_key in st.session_state.sent_favorite_alerts:
+            continue
+        in_cooldown, _ = risk_rules.check_cooldown(item["symbol"], item["signal"])
+        if in_cooldown:
+            continue
+        ok, _ = send_signal_alert(item["symbol"], item["result"])
+        if ok:
+            st.session_state.sent_favorite_alerts.add(alert_key)

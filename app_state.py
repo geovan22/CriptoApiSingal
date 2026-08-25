@@ -19,8 +19,8 @@ def init_session_state():
         st.session_state.telegram_offset = 0
     if "last_alert" not in st.session_state:
         st.session_state.last_alert = None
-    if "scan_mode" not in st.session_state:
-        st.session_state.scan_mode = False
+    if "notify_favorites" not in st.session_state:
+        st.session_state.notify_favorites = False
     if "refresh_paused" not in st.session_state:
         st.session_state.refresh_paused = False
 

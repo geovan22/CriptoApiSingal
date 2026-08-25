@@ -5,8 +5,8 @@ La lógica está repartida en módulos por responsabilidad:
   app_state.py         - sesión, DB init, refresco dinámico
   signal_service.py     - caché de datos + cálculo de señal
   telegram_handler.py   - comandos entrantes de Telegram
-  operations_monitor.py - cierre automático, break-even, modo escaneo
-  ui_favorites.py        - panel de favoritos
+  operations_monitor.py - cierre automático, break-even, watchlist favoritos
+  ui_favorites.py        - panel de favoritos (watchlist pasiva)
   ui_backtest.py          - panel de backtest
   ui_backup.py            - panel de respaldo + historial
   ui_charts.py            - gráficos
@@ -14,8 +14,9 @@ La lógica está repartida en módulos por responsabilidad:
   ui_operations.py        - operaciones en seguimiento
 
 UI organizada en pestañas: la pestaña "Señal" (la más usada) es la
-primera y no requiere abrir nada -- las demás secciones quedan a un
-toque de distancia en vez de todas apiladas con scroll largo.
+primera y no requiere abrir nada. Favoritos es una watchlist pasiva --
+solo lista señales confirmadas, nunca cambia el símbolo en seguimiento
+por su cuenta; el usuario elige manualmente cuál revisar a fondo.
 """
 import time
 import streamlit as st
@@ -25,7 +26,7 @@ import db
 from app_state import init_session_state, setup_autorefresh, set_symbol
 from signal_service import get_data_and_signal
 from telegram_handler import process_telegram_commands
-from operations_monitor import check_open_operations, run_scan_mode
+from operations_monitor import check_open_operations, get_confirmed_favorites_signals, notify_favorites_signals
 from ui_favorites import render_favorites_panel
 from ui_backtest import render_backtest_panel
 from ui_backup import render_backup_panel
@@ -33,31 +34,55 @@ from ui_charts import render_charts
 from ui_signal_panel import render_signal_panel
 from ui_operations import render_operations_panel
 
-st.set_page_config(page_title="Crypto Signal Dashboard", layout="wide")
+st.set_page_config(page_title="Crypto Signal Dashboard", layout="wide", page_icon="📊")
+
+# --- Estilo moderno: tarjetas mas limpias, botones y metricas con mas aire ---
+st.markdown("""
+<style>
+    div[data-testid="stMetric"] {
+        background-color: rgba(128, 128, 128, 0.07);
+        border-radius: 10px;
+        padding: 10px 14px;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 12px;
+    }
+    button[kind="secondary"], button[kind="primary"] {
+        border-radius: 8px;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0;
+        padding: 8px 16px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 db.init_db(default_symbols=config.AVAILABLE_SYMBOLS)
 init_session_state()
 
 # Una sola consulta de operaciones abiertas por refresco, compartida por
-# todos los módulos que la necesitan (antes se consultaba 4 veces).
+# todos los módulos que la necesitan.
 open_ops = db.get_open_operations()
 refresh_ms = setup_autorefresh(len(open_ops))
 
 # --- Procesos de fondo (corren en cada refresco) ---
 process_telegram_commands()
 check_open_operations(open_ops)
-run_scan_mode()
+confirmed_favorites = get_confirmed_favorites_signals()
+notify_favorites_signals(confirmed_favorites)
 
 # --- UI ---
 st.title("📊 Crypto Signal Dashboard")
-st.caption("🔧 build-check: v-diag-001")
 
 tab_signal, tab_favorites, tab_backtest, tab_backup = st.tabs(
     ["📈 Señal", "⭐ Favoritos", "🧪 Backtest", "💾 Historial/Respaldo"]
 )
 
 with tab_favorites:
-    render_favorites_panel()
+    render_favorites_panel(confirmed_favorites)
 
 with tab_backtest:
     render_backtest_panel()
@@ -71,11 +96,8 @@ with tab_signal:
         options = config.AVAILABLE_SYMBOLS.copy()
         if st.session_state.symbol not in options:
             options.append(st.session_state.symbol)
-        chosen = st.selectbox(
-            "Cripto en seguimiento", options, index=options.index(st.session_state.symbol),
-            disabled=st.session_state.scan_mode,
-        )
-        if chosen != st.session_state.symbol and not st.session_state.scan_mode:
+        chosen = st.selectbox("Cripto en seguimiento", options, index=options.index(st.session_state.symbol))
+        if chosen != st.session_state.symbol:
             set_symbol(chosen)
 
     with col_info:
