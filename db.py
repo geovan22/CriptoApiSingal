@@ -40,10 +40,6 @@ LOCAL_DB_PATH = "file:crypto_dashboard.db"
 
 def _get_client():
     if _TURSO_URL:
-        # El esquema libsql:// equivale a wss:// (WebSocket) en el cliente
-        # de Python. Streamlit Cloud bloquea/interfiere con WebSockets
-        # salientes, así que forzamos https:// (protocolo HTTP de Hrana),
-        # más compatible con entornos cloud restringidos.
         url = _TURSO_URL.replace("libsql://", "https://", 1)
         return libsql_client.create_client_sync(url=url, auth_token=_TURSO_TOKEN)
     return libsql_client.create_client_sync(LOCAL_DB_PATH)
@@ -80,11 +76,14 @@ def init_db(default_symbols=None):
                 for s in default_symbols:
                     c.execute("INSERT OR IGNORE INTO favorites (symbol) VALUES (?)", [s])
 
-        # Migración segura: agregar columnas de break-even si no existen todavía
-        # (ALTER TABLE ADD COLUMN falla si ya existe -- se ignora ese error).
         for stmt in [
             "ALTER TABLE operations ADD COLUMN initial_stop REAL",
             "ALTER TABLE operations ADD COLUMN breakeven_applied INTEGER DEFAULT 0",
+            "ALTER TABLE operations ADD COLUMN investment_amount REAL",
+            "ALTER TABLE operations ADD COLUMN risk_pct_used REAL",
+            "ALTER TABLE operations ADD COLUMN capital_at_entry REAL",
+            "ALTER TABLE operations ADD COLUMN quantity REAL",
+            "ALTER TABLE operations ADD COLUMN close_reason TEXT",
         ]:
             try:
                 c.execute(stmt)
@@ -126,12 +125,15 @@ def set_state(key: str, value: str):
 
 
 # --- Operaciones en seguimiento ---
-def create_operation(symbol, direction, entry, stop, tp) -> int:
+def create_operation(symbol, direction, entry, stop, tp, investment_amount=None,
+                      risk_pct_used=None, capital_at_entry=None, quantity=None) -> int:
     with _get_client() as c:
         rs = c.execute(
-            "INSERT INTO operations (symbol, direction, entry, stop, tp, opened_at, status, initial_stop) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?) RETURNING id",
-            [symbol, direction, entry, stop, tp, datetime.now(timezone.utc).isoformat(), stop],
+            "INSERT INTO operations (symbol, direction, entry, stop, tp, opened_at, status, "
+            "initial_stop, investment_amount, risk_pct_used, capital_at_entry, quantity) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?) RETURNING id",
+            [symbol, direction, entry, stop, tp, datetime.now(timezone.utc).isoformat(), stop,
+             investment_amount, risk_pct_used, capital_at_entry, quantity],
         )
         return rs.rows[0][0]
 
@@ -150,7 +152,7 @@ def get_operation_history(limit: int = 20) -> list:
         return _rows_as_dicts(rs)
 
 
-def close_operation(op_id: int, close_price: float, outcome: str):
+def close_operation(op_id: int, close_price: float, outcome: str, close_reason: str = None):
     with _get_client() as c:
         rs = c.execute("SELECT * FROM operations WHERE id = ?", [op_id])
         rows = _rows_as_dicts(rs)
@@ -162,8 +164,8 @@ def close_operation(op_id: int, close_price: float, outcome: str):
         else:
             pnl_pct = (op["entry"] - close_price) / op["entry"] * 100
         c.execute(
-            "UPDATE operations SET status='closed', closed_at=?, outcome=?, close_price=?, pnl_pct=? WHERE id=?",
-            [datetime.now(timezone.utc).isoformat(), outcome, close_price, pnl_pct, op_id],
+            "UPDATE operations SET status='closed', closed_at=?, outcome=?, close_price=?, pnl_pct=?, close_reason=? WHERE id=?",
+            [datetime.now(timezone.utc).isoformat(), outcome, close_price, pnl_pct, close_reason or outcome, op_id],
         )
 
 
@@ -209,10 +211,13 @@ def import_backup(json_text: str):
                 continue
             c.execute(
                 "INSERT INTO operations (id, symbol, direction, entry, stop, tp, opened_at, closed_at, "
-                "status, outcome, close_price, pnl_pct, early_warning_sent, initial_stop, breakeven_applied) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "status, outcome, close_price, pnl_pct, early_warning_sent, initial_stop, breakeven_applied, "
+                "investment_amount, risk_pct_used, capital_at_entry, quantity, close_reason) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [op["id"], op["symbol"], op["direction"], op["entry"], op["stop"], op["tp"],
                  op["opened_at"], op.get("closed_at"), op["status"], op.get("outcome"),
                  op.get("close_price"), op.get("pnl_pct"), op.get("early_warning_sent", 0),
-                 op.get("initial_stop", op["stop"]), op.get("breakeven_applied", 0)],
+                 op.get("initial_stop", op["stop"]), op.get("breakeven_applied", 0),
+                 op.get("investment_amount"), op.get("risk_pct_used"),
+                 op.get("capital_at_entry"), op.get("quantity"), op.get("close_reason")],
             )

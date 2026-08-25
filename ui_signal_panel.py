@@ -54,7 +54,9 @@ def _render_signal_metrics(result: dict):
     st.write(f"**Delta:** {result['delta_state']} ({result['delta_pct']}%)")
     if result.get("trend_1d"):
         st.write(f"**Tendencia 1D:** {result['trend_1d']}")
-    st.write(f"**ADX:** {result['adx']} ({result['trend_strength']})")
+    st.write(f"**ADX:** {result['adx']} ({result['trend_strength']}, dirección DI: {result.get('di_direction', '—')})")
+    if result.get("stoch_k") is not None:
+        st.write(f"**Stoch RSI:** {result['stoch_k']}")
     if result["trend_strength"] == "lateral/débil":
         st.caption("⚠️ Mercado sin tendencia clara -- las señales de MACD/EMA son menos fiables ahora.")
     if result.get("pattern"):
@@ -63,6 +65,9 @@ def _render_signal_metrics(result: dict):
         st.write(f"**Soporte cercano:** {format_price(result['support'])}")
     if result["resistance"]:
         st.write(f"**Resistencia cercana:** {format_price(result['resistance'])}")
+    vp = result.get("volume_profile")
+    if vp:
+        st.caption(f"📊 Volume Profile: POC {format_price(vp['poc'])} · VAH {format_price(vp['vah'])} · VAL {format_price(vp['val'])}")
 
     st.markdown("**Razones a favor:**")
     for r in result["reasons"]:
@@ -88,11 +93,10 @@ def _render_quantfury_values(result: dict):
     st.code(f"{format_price(result['tp'])}", language=None)
 
 
-def _render_accept_operation_button(symbol: str, signal: str, result: dict, open_ops: list):
+def _render_accept_operation_button(symbol: str, signal: str, result: dict, open_ops: list, calc: dict):
     open_ops_this_symbol = [o for o in open_ops if o["symbol"] == symbol]
     if open_ops_this_symbol:
-        st.info(f"Ya tienes una operación de {symbol} en seguimiento.")
-        return
+        st.caption(f"Ya tienes {len(open_ops_this_symbol)} operación(es) de {symbol} en seguimiento -- puedes agregar otra más si quieres.")
 
     if result["status"] != "confirmada":
         st.caption("No disponible para seguimiento hasta que la señal esté confirmada (no filtrada ni en formación).")
@@ -104,12 +108,18 @@ def _render_accept_operation_button(symbol: str, signal: str, result: dict, open
         return
 
     if st.button("✅ Aceptar y dar seguimiento a esta operación"):
-        db.create_operation(symbol, signal, result["entry"], result["stop"], result["tp"])
-        st.success("Operación en seguimiento. Se revisa automáticamente cada refresco.")
+        db.create_operation(
+            symbol, signal, result["entry"], result["stop"], result["tp"],
+            investment_amount=calc.get("investment"),
+            risk_pct_used=calc.get("risk_pct"),
+            capital_at_entry=calc.get("capital"),
+            quantity=calc.get("qty"),
+        )
+        st.success("Operación en seguimiento (con el monto, riesgo y cantidad de la calculadora ya guardados). Se revisa automáticamente cada refresco.")
         st.rerun()
 
 
-def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str):
+def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str) -> dict:
     st.markdown("**Calculadora de ganancia/pérdida**")
     entry, stop, tp = result["entry"], result["stop"], result["tp"]
     stop_distance_pct = abs(entry - stop) / entry if entry else 0
@@ -173,6 +183,8 @@ def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str):
             f"sobre tu capital de ${capital:,.2f}. Verifica siempre el apalancamiento real que usa tu bróker."
         )
 
+    return {"capital": capital, "risk_pct": risk_pct, "investment": investment, "qty": qty}
+
 
 def _maybe_send_alert(symbol: str, signal: str, result: dict, alert_key: str):
     if (
@@ -201,8 +213,8 @@ def render_signal_panel(symbol: str, result: dict, open_ops: list):
 
     if signal in ("COMPRA", "VENTA"):
         _render_quantfury_values(result)
-        _render_accept_operation_button(symbol, signal, result, open_ops)
-        _render_calculator(symbol, signal, result, alert_key)
+        calc = _render_calculator(symbol, signal, result, alert_key)
+        _render_accept_operation_button(symbol, signal, result, open_ops, calc)
         _maybe_send_alert(symbol, signal, result, alert_key)
     else:
         st.info("Sin señal confirmada — mercado en zona de espera.")

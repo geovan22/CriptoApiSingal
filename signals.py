@@ -12,22 +12,19 @@ volumen/order flow (PVT, delta) pesa más que los indicadores derivados
 solo del precio (MACD, RSI), que la guía trata con más escepticismo.
 
 IMPORTANTE:
-1) La señal se calcula usando solo velas YA CERRADAS. La última vela del
-   gráfico está en formación y sus valores cambian en vivo -- evaluarla
-   directamente causa señales que aparecen y desaparecen en minutos.
-2) Confirmación de 2 velas: una señal solo se marca "confirmada" si se
-   sostiene en las dos últimas velas cerradas (no solo en la más reciente).
-   Si aparece por primera vez, queda como "en formación" y no dispara
-   alerta -- reduce falsas señales de una sola vela.
-3) Las razones se separan en "a favor" y "en conflicto" para no mezclar
-   señales que apoyan la decisión con las que la contradicen.
-4) Filtros de calidad como PORTERO, no solo aviso: ADX bajo (mercado
-   lateral) o ratio riesgo/beneficio pobre BLOQUEAN la confirmación, no
-   solo la muestran con una advertencia.
+1) La señal se calcula usando solo velas YA CERRADAS.
+2) Confirmación de 2 velas antes de marcar "confirmada".
+3) Las razones se separan en "a favor" y "en conflicto".
+4) Filtros de calidad como PORTERO (ADX, R:B) -- bloquean, no solo avisan.
+5) TP multi-nivel (swing + Volume Profile), buscando el primero que cumpla el R:B mínimo.
+6) DI+/DI- y Stoch RSI se calculan y se EXPONEN como información adicional,
+   pero NO se usan en el puntaje -- para no alterar la lógica ya validada
+   con backtests. Antes se calculaban y se descartaban sin mostrarse nunca.
 """
 import pandas as pd
 import numpy as np
 from indicators import detect_engulfing
+from volume_profile import compute_volume_profile
 
 try:
     import config
@@ -51,7 +48,6 @@ WEIGHTS = {
 
 
 def only_closed_candles(df: pd.DataFrame) -> pd.DataFrame:
-    """Descarta la última vela si todavía está en formación."""
     now = pd.Timestamp.now(tz="UTC").tz_localize(None)
     if df.iloc[-1]["close_time"] > now:
         return df.iloc[:-1].copy()
@@ -59,7 +55,6 @@ def only_closed_candles(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def find_swing_levels(df: pd.DataFrame, lookback: int = 60, order: int = 3):
-    """Encuentra soportes y resistencias como máximos/mínimos locales recientes."""
     highs, lows = [], []
     sub = df.tail(lookback).reset_index(drop=True)
     for i in range(order, len(sub) - order):
@@ -81,11 +76,20 @@ def nearest_level(price: float, levels: list, above: bool):
     return min(candidates) if above else max(candidates)
 
 
+def pick_tp_with_min_rr(entry: float, stop: float, levels: list, above: bool, min_rr: float):
+    risk = abs(entry - stop)
+    if risk <= 0:
+        return nearest_level(entry, levels, above)
+
+    candidates = sorted([l for l in levels if (l > entry if above else l < entry)], reverse=not above)
+    for lvl in candidates:
+        reward = abs(lvl - entry)
+        if reward / risk >= min_rr:
+            return lvl
+    return candidates[0] if candidates else None
+
+
 def get_daily_trend(df_1d: pd.DataFrame) -> str:
-    """
-    Tendencia de contexto usando velas diarias: precio de cierre vs EMA 50.
-    Se usa como filtro informativo, no como condición obligatoria.
-    """
     df = only_closed_candles(df_1d)
     last = df.iloc[-1]
     if pd.isna(last.get("ema50")):
@@ -94,11 +98,6 @@ def get_daily_trend(df_1d: pd.DataFrame) -> str:
 
 
 def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
-    """
-    Calcula el puntaje de confluencia y las razones para la ÚLTIMA vela
-    cerrada de df (df ya debe venir filtrado con only_closed_candles).
-    Devuelve (signal, buy_score, sell_score, buy_reasons, sell_reasons, extras)
-    """
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -134,9 +133,6 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
     else:
         delta_state = "equilibrado"
 
-    # ADX: fuerza de tendencia (no direccional). No suma puntos a favor/en
-    # contra directamente -- se usa para avisar cuando el mercado está
-    # lateral y las señales de MACD/EMA son menos fiables en ese contexto.
     adx_val = last.get("adx14", 0)
     if adx_val >= 25:
         trend_strength = "fuerte"
@@ -145,13 +141,25 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
     else:
         trend_strength = "lateral/débil"
 
-    atr_val = last.get("atr14", None)
+    di_direction = "alcista" if last.get("plus_di", 0) > last.get("minus_di", 0) else "bajista"
+    stoch_k_val = last.get("stoch_k", None)
 
-    # Patrón de velas envolvente (clásico, del ebook de patrones)
+    atr_val = last.get("atr14", None)
     pattern = detect_engulfing(df)
 
     supports, resistances = find_swing_levels(df)
     price = last["close"]
+
+    vp = compute_volume_profile(df, lookback=120, bins=24)
+    if vp:
+        for lvl in (vp["poc"], vp["vah"], vp["val"]):
+            if lvl > price:
+                resistances.append(round(lvl, 2))
+            elif lvl < price:
+                supports.append(round(lvl, 2))
+        resistances = sorted(set(resistances))
+        supports = sorted(set(supports), reverse=True)
+
     near_support = nearest_level(price, supports, above=False)
     near_resistance = nearest_level(price, resistances, above=True)
 
@@ -160,7 +168,6 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
     buy_reasons = []
     sell_reasons = []
 
-    # MACD (peso 1)
     if macd_state == "alcista":
         buy_score += WEIGHTS["macd"]
         buy_reasons.append("MACD en fase alcista")
@@ -168,7 +175,6 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         sell_score += WEIGHTS["macd"]
         sell_reasons.append("MACD en fase bajista")
 
-    # RSI (peso 1)
     if rsi_zone == "sobreventa":
         buy_score += WEIGHTS["rsi"]
         buy_reasons.append("RSI en sobreventa (<30)")
@@ -176,7 +182,6 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         sell_score += WEIGHTS["rsi"]
         sell_reasons.append("RSI en sobrecompra (>70)")
 
-    # PVT (peso 1.5 -- volumen real, pesa más que MACD/RSI)
     if "confirma alcista" in pvt_confirm:
         buy_score += WEIGHTS["pvt"]
         buy_reasons.append("PVT confirma presión compradora")
@@ -190,7 +195,6 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         buy_score += WEIGHTS["pvt"] * 0.5
         buy_reasons.append("Divergencia alcista PVT/precio")
 
-    # Delta (peso 1.5 -- volumen real)
     if "comprador" in delta_state:
         buy_score += WEIGHTS["delta"]
         buy_reasons.append("Delta comprador en últimas velas cerradas")
@@ -198,7 +202,6 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         sell_score += WEIGHTS["delta"]
         sell_reasons.append("Delta vendedor en últimas velas cerradas")
 
-    # Soporte/Resistencia (peso 1)
     if near_support and abs(price - near_support) / price < 0.006:
         buy_score += WEIGHTS["level"]
         buy_reasons.append(f"Precio cerca de soporte {near_support}")
@@ -206,7 +209,6 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         sell_score += WEIGHTS["level"]
         sell_reasons.append(f"Precio cerca de resistencia {near_resistance}")
 
-    # Tendencia diaria (peso 0.5 -- contexto, no obligatorio)
     if trend_1d == "alcista":
         buy_score += WEIGHTS["trend_1d"]
         buy_reasons.append("Tendencia diaria (1D) alcista")
@@ -214,7 +216,6 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         sell_score += WEIGHTS["trend_1d"]
         sell_reasons.append("Tendencia diaria (1D) bajista")
 
-    # Patrón de velas envolvente (peso 0.5)
     if pattern == "alcista":
         buy_score += WEIGHTS["pattern"]
         buy_reasons.append("Patrón envolvente alcista (2 últimas velas)")
@@ -239,8 +240,13 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
         "delta_pct": round(delta_pct * 100, 1),
         "support": near_support,
         "resistance": near_resistance,
+        "supports_list": supports,
+        "resistances_list": resistances,
+        "vp": vp,
         "adx": round(adx_val, 1),
         "trend_strength": trend_strength,
+        "di_direction": di_direction,
+        "stoch_k": round(float(stoch_k_val), 1) if stoch_k_val is not None and not pd.isna(stoch_k_val) else None,
         "atr": atr_val,
         "pattern": pattern,
     }
@@ -248,24 +254,13 @@ def _score_last_closed(df: pd.DataFrame, trend_1d: str = None):
 
 
 def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
-    """
-    df_full: DataFrame con indicadores ya calculados (incluye la vela en curso).
-    trend_1d: 'alcista' | 'bajista' | None -- contexto opcional del timeframe diario.
-
-    Devuelve un diccionario con el diagnóstico completo. La señal solo se
-    marca como "status": "confirmada" si se sostiene en las últimas 2 velas
-    cerradas Y pasa los filtros de calidad (ADX, ratio riesgo/beneficio);
-    si no, queda "en formación", "filtrada_adx" o "filtrada_rr" y no
-    debería ofrecerse como operable.
-    """
     live_price = df_full.iloc[-1]["close"]
     df = only_closed_candles(df_full)
 
     signal, buy_score, sell_score, buy_reasons, sell_reasons, extras = _score_last_closed(df, trend_1d)
 
-    # Confirmación de 2 velas: repetir el cálculo excluyendo la última vela cerrada
     prev_signal = "ESPERA"
-    if len(df) > 60:  # margen para que find_swing_levels tenga suficiente historia
+    if len(df) > 60:
         prev_signal, *_ = _score_last_closed(df.iloc[:-1], trend_1d)
 
     if signal in ("COMPRA", "VENTA") and signal == prev_signal:
@@ -275,9 +270,6 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
     else:
         status = "n/a"
 
-    # Filtro de ADX: portero obligatorio, no solo un aviso. Con ADX bajo
-    # (mercado lateral) los indicadores de momentum (MACD) generan señales
-    # falsas con más frecuencia -- práctica estándar de trading algorítmico.
     if status == "confirmada" and extras["adx"] < MIN_ADX_FOR_SIGNAL:
         status = "filtrada_adx"
 
@@ -287,6 +279,8 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
     price = extras["price"]
     near_support = extras["support"]
     near_resistance = extras["resistance"]
+    supports_list = extras["supports_list"]
+    resistances_list = extras["resistances_list"]
     atr_val = extras["atr"]
 
     entry = stop = tp = None
@@ -295,7 +289,6 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
     if signal == "COMPRA":
         entry = price
         stop = near_support * 0.997 if near_support else price * 0.98
-        tp = near_resistance if near_resistance else price * 1.03
         if atr_val and (entry - stop) < atr_val:
             stop = entry - atr_val
             stop_widened = True
@@ -304,10 +297,12 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
             stop = entry - max_stop_distance
             stop_capped = True
             stop_widened = False
+        tp = pick_tp_with_min_rr(entry, stop, resistances_list, above=True, min_rr=MIN_RR_RATIO)
+        if tp is None:
+            tp = price * 1.03
     elif signal == "VENTA":
         entry = price
         stop = near_resistance * 1.003 if near_resistance else price * 1.02
-        tp = near_support if near_support else price * 0.97
         if atr_val and (stop - entry) < atr_val:
             stop = entry + atr_val
             stop_widened = True
@@ -316,6 +311,9 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
             stop = entry + max_stop_distance
             stop_capped = True
             stop_widened = False
+        tp = pick_tp_with_min_rr(entry, stop, supports_list, above=False, min_rr=MIN_RR_RATIO)
+        if tp is None:
+            tp = price * 0.97
 
     rr_ratio = None
     low_quality_rr = False
@@ -326,9 +324,6 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
             rr_ratio = reward / risk
             low_quality_rr = rr_ratio < MIN_RR_RATIO
 
-    # Filtro de ratio riesgo/beneficio: si aún cumpliendo el resto de
-    # condiciones el TP queda demasiado cerca comparado con el riesgo,
-    # no se confirma -- antes solo se advertía y se dejaba operar igual.
     if status == "confirmada" and low_quality_rr:
         status = "filtrada_rr"
 
@@ -347,9 +342,12 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
         "trend_1d": trend_1d,
         "adx": extras["adx"],
         "trend_strength": extras["trend_strength"],
+        "di_direction": extras["di_direction"],
+        "stoch_k": extras["stoch_k"],
         "pattern": extras["pattern"],
         "support": near_support,
         "resistance": near_resistance,
+        "volume_profile": extras.get("vp"),
         "buy_score": round(buy_score, 2),
         "sell_score": round(sell_score, 2),
         "reasons": reasons,
