@@ -190,11 +190,13 @@ with col2:
 
     alert_key = f"{symbol}:{signal}"
     if signal in ("COMPRA", "VENTA"):
-        st.success(
-            f"Entrada: ${result['entry']:,.2f}\n\n"
-            f"Stop loss: ${result['stop']:,.2f}\n\n"
-            f"Take profit: ${result['tp']:,.2f}"
-        )
+        st.markdown("**Valores para Quantfury (toca el ícono de copiar en cada uno):**")
+        st.caption("Precio de entrada")
+        st.code(f"{result['entry']:.2f}", language=None)
+        st.caption("Stop loss")
+        st.code(f"{result['stop']:.2f}", language=None)
+        st.caption("Take profit")
+        st.code(f"{result['tp']:.2f}", language=None)
 
         st.markdown("**Calculadora de ganancia/pérdida**")
         cap_col, inv_col = st.columns(2)

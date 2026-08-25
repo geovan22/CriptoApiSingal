@@ -33,8 +33,19 @@ except Exception:
 DEFAULT_SYMBOL = "BTCUSDT"
 
 # Opciones sugeridas en el selector de la web (puedes escribir cualquier
-# otro par de Binance manualmente, no está limitado a esta lista)
-AVAILABLE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BCHUSDT"]
+# otro par de Binance manualmente, no está limitado a esta lista).
+#
+# Nota: esto es una lista de las criptos MÁS LÍQUIDAS y con mayor volumen
+# en Binance -- no una promesa de rentabilidad (ninguna cripto lo es).
+# Mayor liquidez importa para esta herramienta porque hace que los niveles
+# de soporte/resistencia, delta y PVT sean más confiables (spreads más
+# ajustados, menos manipulación de precio por operadores pequeños).
+AVAILABLE_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
+    "LTCUSDT", "TRXUSDT", "TONUSDT", "NEARUSDT", "SUIUSDT",
+    "APTUSDT", "ARBUSDT", "OPUSDT", "POLUSDT", "BCHUSDT",
+]
 
 # Temporalidad (4h: buen balance entre calidad de señal y ruido,
 # consistente con el análisis manual que ya veníamos haciendo en el chat)
