@@ -21,6 +21,9 @@ IMPORTANTE:
    alerta -- reduce falsas señales de una sola vela.
 3) Las razones se separan en "a favor" y "en conflicto" para no mezclar
    señales que apoyan la decisión con las que la contradicen.
+4) Filtros de calidad como PORTERO, no solo aviso: ADX bajo (mercado
+   lateral) o ratio riesgo/beneficio pobre BLOQUEAN la confirmación, no
+   solo la muestran con una advertencia.
 """
 import pandas as pd
 import numpy as np
@@ -30,9 +33,11 @@ try:
     import config
     MAX_STOP_PCT = getattr(config, "MAX_STOP_PCT", 0.04)
     MIN_RR_RATIO = getattr(config, "MIN_RR_RATIO", 1.0)
+    MIN_ADX_FOR_SIGNAL = getattr(config, "MIN_ADX_FOR_SIGNAL", 20)
 except Exception:
     MAX_STOP_PCT = 0.04
     MIN_RR_RATIO = 1.0
+    MIN_ADX_FOR_SIGNAL = 20
 
 WEIGHTS = {
     "macd": 1.0,
@@ -249,8 +254,9 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
 
     Devuelve un diccionario con el diagnóstico completo. La señal solo se
     marca como "status": "confirmada" si se sostiene en las últimas 2 velas
-    cerradas; si es la primera vez que aparece, queda "en formación" y no
-    debería disparar una alerta todavía.
+    cerradas Y pasa los filtros de calidad (ADX, ratio riesgo/beneficio);
+    si no, queda "en formación", "filtrada_adx" o "filtrada_rr" y no
+    debería ofrecerse como operable.
     """
     live_price = df_full.iloc[-1]["close"]
     df = only_closed_candles(df_full)
@@ -268,6 +274,12 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
         status = "en formación"
     else:
         status = "n/a"
+
+    # Filtro de ADX: portero obligatorio, no solo un aviso. Con ADX bajo
+    # (mercado lateral) los indicadores de momentum (MACD) generan señales
+    # falsas con más frecuencia -- práctica estándar de trading algorítmico.
+    if status == "confirmada" and extras["adx"] < MIN_ADX_FOR_SIGNAL:
+        status = "filtrada_adx"
 
     reasons = buy_reasons if signal == "COMPRA" else sell_reasons if signal == "VENTA" else []
     conflict_reasons = sell_reasons if signal == "COMPRA" else buy_reasons if signal == "VENTA" else []
@@ -313,6 +325,12 @@ def evaluate_signal(df_full: pd.DataFrame, trend_1d: str = None) -> dict:
         if risk > 0:
             rr_ratio = reward / risk
             low_quality_rr = rr_ratio < MIN_RR_RATIO
+
+    # Filtro de ratio riesgo/beneficio: si aún cumpliendo el resto de
+    # condiciones el TP queda demasiado cerca comparado con el riesgo,
+    # no se confirma -- antes solo se advertía y se dejaba operar igual.
+    if status == "confirmada" and low_quality_rr:
+        status = "filtrada_rr"
 
     return {
         "signal": signal,

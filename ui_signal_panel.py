@@ -33,10 +33,20 @@ def _render_signal_metrics(result: dict):
     color = {"COMPRA": "🟢", "VENTA": "🔴", "ESPERA": "🟡"}[signal]
     status_tag = ""
     if signal in ("COMPRA", "VENTA"):
-        status_tag = " ✅ confirmada" if result["status"] == "confirmada" else " ⏳ en formación"
+        status_labels = {
+            "confirmada": " ✅ confirmada",
+            "en formación": " ⏳ en formación",
+            "filtrada_adx": " 🚫 filtrada (ADX bajo)",
+            "filtrada_rr": " 🚫 filtrada (riesgo/beneficio pobre)",
+        }
+        status_tag = status_labels.get(result["status"], "")
     st.subheader(f"{color} {signal}{status_tag}")
     if signal in ("COMPRA", "VENTA") and result["status"] == "en formación":
         st.caption("Apareció en la última vela cerrada. Se confirma si se sostiene en la próxima.")
+    if result["status"] == "filtrada_adx":
+        st.caption(f"⛔ Cumplió el puntaje de confluencia, pero el ADX ({result['adx']}) está por debajo del mínimo ({config.MIN_ADX_FOR_SIGNAL}) -- mercado sin tendencia clara, alto riesgo de señal falsa. No se ofrece como operable.")
+    if result["status"] == "filtrada_rr":
+        st.caption(f"⛔ Cumplió el puntaje de confluencia, pero el ratio riesgo/beneficio ({result['rr_ratio']}:1) está por debajo del mínimo ({config.MIN_RR_RATIO}:1). No se ofrece como operable.")
 
     st.write(f"**MACD:** {result['macd_state']}")
     st.write(f"**RSI 14:** {result['rsi']} ({result['rsi_zone']})")
@@ -82,6 +92,10 @@ def _render_accept_operation_button(symbol: str, signal: str, result: dict, open
     open_ops_this_symbol = [o for o in open_ops if o["symbol"] == symbol]
     if open_ops_this_symbol:
         st.info(f"Ya tienes una operación de {symbol} en seguimiento.")
+        return
+
+    if result["status"] != "confirmada":
+        st.caption("No disponible para seguimiento hasta que la señal esté confirmada (no filtrada ni en formación).")
         return
 
     in_cooldown, cooldown_msg = risk_rules.check_cooldown(symbol, signal)

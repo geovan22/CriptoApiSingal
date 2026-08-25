@@ -58,6 +58,14 @@ INTERVAL = "4h"
 # 2 velas de 4h = 8 horas de espera tras un stop.
 COOLDOWN_CANDLES = 2
 
+# ADX mínimo para permitir que una señal se confirme. Investigación estándar
+# de trading algorítmico: por debajo de 20, el mercado está lateral/sin
+# tendencia clara y los indicadores de momentum (MACD) dan señales falsas
+# ("whipsaws") con más frecuencia. Antes esto solo se mostraba como aviso;
+# ahora bloquea la confirmación -- el ADX actúa como "portero", no como
+# un dato más que suma puntos.
+MIN_ADX_FOR_SIGNAL = 20
+
 # --- Gestión de riesgo ---
 # Distancia máxima permitida para el stop loss, como % del precio de entrada.
 #
