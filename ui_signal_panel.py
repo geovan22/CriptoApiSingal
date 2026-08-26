@@ -245,6 +245,14 @@ def _render_mean_reversion_panel(symbol: str, open_ops: list):
     st.code(f"Take profit: {format_price(mr['tp'])}", language=None)
     st.caption(f"Ratio riesgo/beneficio: 1:{mr['rr_ratio']}")
 
+    if not getattr(config, "ENABLE_MEAN_REVERSION_LIVE", False):
+        st.warning(
+            "⏸️ Este modo está pausado para uso en vivo -- los primeros backtests dieron "
+            "resultados negativos consistentes (9/9 operaciones perdedoras). Los valores de "
+            "arriba son de referencia. Sigue disponible para probar en la pestaña Backtest."
+        )
+        return
+
     open_ops_this_symbol = [o for o in open_ops if o["symbol"] == symbol]
     if open_ops_this_symbol:
         st.caption(f"Ya tienes {len(open_ops_this_symbol)} operación(es) de {symbol} en seguimiento.")

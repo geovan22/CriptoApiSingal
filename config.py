@@ -70,6 +70,24 @@ COOLDOWN_CANDLES = 2
 # un dato más que suma puntos.
 MIN_ADX_FOR_SIGNAL = 20
 
+# Modo reversión a la media: disponible para BACKTEST siempre, pero
+# pausado para uso en vivo (sin botón de aceptar) hasta que muestre
+# resultados razonables. Los primeros backtests dieron 9/9 operaciones
+# perdedoras (BTC, SOL, DOGE) incluso después de ampliar el stop -- señal
+# de que el problema es el punto de entrada (se compra al cierre de la
+# vela de rechazo, ya después del rebote inmediato), no solo la distancia
+# del stop. Cambiar a True solo cuando el backtest muestre ventaja real.
+ENABLE_MEAN_REVERSION_LIVE = False
+
+# Modo reversión a la media: disponible para BACKTEST siempre, pero
+# pausado para uso en vivo (sin botón de aceptar) hasta que muestre
+# resultados razonables. Los primeros backtests dieron 9/9 operaciones
+# perdedoras (BTC, SOL, DOGE) incluso después de ampliar el stop -- señal
+# de que el problema es el punto de entrada (se compra al cierre de la
+# vela de rechazo, ya después del rebote inmediato), no solo la distancia
+# del stop. Cambiar a True solo cuando el backtest muestre ventaja real.
+ENABLE_MEAN_REVERSION_LIVE = False
+
 # --- Gestión de riesgo ---
 # Distancia máxima permitida para el stop loss, como % del precio de entrada.
 #
