@@ -1,9 +1,12 @@
 """Panel de respaldo, restauración, historial, y desempeño real (vive dentro de una pestaña)."""
+import io
+import csv
 import streamlit as st
 
 import config
 import db
 import performance
+import post_close_review
 
 
 def _render_performance_report():
@@ -65,6 +68,25 @@ def _render_performance_report():
             )
 
 
+def _operations_to_csv() -> str:
+    """Junta operaciones abiertas + cerradas en un CSV listo para Excel/Sheets."""
+    all_ops = db.get_open_operations() + db.get_operation_history(1000)
+    if not all_ops:
+        return ""
+    cols = [
+        "id", "symbol", "direction", "strategy", "status", "entry", "stop", "initial_stop",
+        "tp", "opened_at", "closed_at", "outcome", "close_reason", "close_price", "pnl_pct",
+        "investment_amount", "risk_pct_used", "capital_at_entry", "quantity",
+        "mfe_price", "mae_price", "breakeven_applied",
+    ]
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=cols, extrasaction="ignore")
+    writer.writeheader()
+    for op in all_ops:
+        writer.writerow(op)
+    return output.getvalue()
+
+
 def render_backup_panel():
     _render_performance_report()
 
@@ -78,11 +100,60 @@ def render_backup_panel():
             "(gratis) para que sea permanente -- ver instrucciones al inicio de db.py."
         )
     st.download_button("Descargar respaldo (JSON)", db.export_backup(), file_name="crypto_dashboard_backup.json")
+    csv_data = _operations_to_csv()
+    if csv_data:
+        st.download_button(
+            "📄 Descargar operaciones (CSV, para Excel/Sheets)", csv_data,
+            file_name="operaciones.csv", mime="text/csv",
+        )
     uploaded = st.file_uploader("Restaurar desde respaldo", type="json", key="restore_upload")
     if uploaded and st.button("Restaurar"):
         db.import_backup(uploaded.read().decode("utf-8"))
         st.success("Respaldo restaurado.")
         st.rerun()
+
+    st.divider()
+    st.markdown("### 🔍 Revisión de cierres manuales")
+    st.caption(
+        "Para cada operación que cerraste tú mismo (no por TP/stop automático), simula qué "
+        "habría pasado si la hubieras dejado correr -- para saber si tus cierres manuales están "
+        "ayudando o quitándole ganancia al sistema."
+    )
+    if st.button("🔬 Analizar mis cierres manuales"):
+        with st.spinner("Simulando qué hubiera pasado..."):
+            closed_ops = db.get_operation_history(200)
+            reviews = post_close_review.review_manual_closes(closed_ops)
+        st.session_state["manual_review"] = reviews
+
+    if "manual_review" in st.session_state:
+        reviews = st.session_state["manual_review"]
+        if not reviews:
+            st.info("No hay operaciones cerradas manualmente para analizar todavía.")
+        else:
+            better, worse, same = 0, 0, 0
+            for r in reviews:
+                actual = r["actual_pnl_pct"] or 0
+                sim = r["sim_pnl_pct"]
+                diff = actual - sim
+                if abs(diff) < 0.1:
+                    same += 1
+                    tag = "⚪ Similar"
+                elif diff > 0:
+                    better += 1
+                    tag = "✅ Cerrar manual fue MEJOR"
+                else:
+                    worse += 1
+                    tag = "🔴 Cerrar manual fue PEOR"
+
+                outcome_label = {"tp": "habría tocado TP", "stop": "habría tocado stop", "sigue_abierta": "seguiría abierta hoy"}[r["sim_outcome"]]
+                st.write(
+                    f"**{r['symbol']} {r['direction']}** -- {tag}\n\n"
+                    f"Real: {actual:+.2f}% · Si no la tocabas: {outcome_label} con {sim:+.2f}% "
+                    f"({r['sim_bars']} velas después)"
+                )
+                st.divider()
+
+            st.caption(f"Resumen: {better} veces mejor cerrar manual, {worse} veces peor, {same} similar -- de {len(reviews)} operaciones analizadas.")
 
     st.divider()
     history = db.get_operation_history(15)
