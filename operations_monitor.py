@@ -7,6 +7,7 @@ import streamlit as st
 import config
 import db
 import risk_rules
+import trading_hours
 from price_format import format_price
 from telegram_alert import send_telegram_message
 from signal_service import get_data_and_signal
@@ -79,11 +80,6 @@ def check_open_operations(open_ops: list):
 
 
 def get_confirmed_favorites_signals(open_ops: list = None) -> list:
-    """
-    Excluye símbolos que ya tienen una operación abierta en seguimiento --
-    ya los estás vigilando en Seguimiento, no hace falta que también
-    aparezcan como "nueva oportunidad" en Favoritos.
-    """
     symbols_in_tracking = {op["symbol"] for op in (open_ops or [])}
     results = []
     for fav_symbol in db.get_favorites():
@@ -100,6 +96,9 @@ def get_confirmed_favorites_signals(open_ops: list = None) -> list:
 
 def notify_favorites_signals(confirmed_list: list):
     if not st.session_state.get("notify_favorites") or not (TOKEN and CHAT_ID) or not st.session_state.notifications_enabled:
+        return
+    within_hours, _ = trading_hours.is_within_trading_hours()
+    if not within_hours:
         return
     if "sent_favorite_alerts" not in st.session_state:
         st.session_state.sent_favorite_alerts = set()

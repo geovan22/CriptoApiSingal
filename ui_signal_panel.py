@@ -6,6 +6,7 @@ import streamlit as st
 import config
 import db
 import risk_rules
+import trading_hours
 from price_format import format_price
 from signal_service import get_mean_reversion_signal
 from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
@@ -103,6 +104,11 @@ def _render_accept_operation_button(symbol: str, signal: str, result: dict, open
         st.caption("No disponible para seguimiento hasta que la señal esté confirmada (no filtrada ni en formación).")
         return
 
+    within_hours, hours_msg = trading_hours.is_within_trading_hours()
+    if not within_hours:
+        st.warning(hours_msg)
+        return
+
     in_cooldown, cooldown_msg = risk_rules.check_cooldown(symbol, signal)
     if in_cooldown:
         st.warning(cooldown_msg)
@@ -194,6 +200,9 @@ def _maybe_send_alert(symbol: str, signal: str, result: dict, alert_key: str):
         and st.session_state.notifications_enabled
         and TOKEN and CHAT_ID
     ):
+        within_hours, _ = trading_hours.is_within_trading_hours()
+        if not within_hours:
+            return
         in_cooldown, _ = risk_rules.check_cooldown(symbol, signal)
         if in_cooldown:
             return
@@ -206,13 +215,6 @@ def _maybe_send_alert(symbol: str, signal: str, result: dict, alert_key: str):
 
 
 def _render_mean_reversion_panel(symbol: str, open_ops: list):
-    """
-    Modo COMPLEMENTARIO -- solo se activa cuando el sistema de tendencia
-    no opera por ADX bajo (mercado lateral). Metodología distinta
-    (Bollinger Bands + vela de rechazo), validada externamente para ese
-    régimen específico. Se muestra separado y claramente etiquetado para
-    no confundirse con la señal principal.
-    """
     mr = get_mean_reversion_signal(symbol)
     if not mr.get("active"):
         return
@@ -256,6 +258,11 @@ def _render_mean_reversion_panel(symbol: str, open_ops: list):
     open_ops_this_symbol = [o for o in open_ops if o["symbol"] == symbol]
     if open_ops_this_symbol:
         st.caption(f"Ya tienes {len(open_ops_this_symbol)} operación(es) de {symbol} en seguimiento.")
+
+    within_hours, hours_msg = trading_hours.is_within_trading_hours()
+    if not within_hours:
+        st.warning(hours_msg)
+        return
 
     in_cooldown, cooldown_msg = risk_rules.check_cooldown(symbol, signal)
     if in_cooldown:

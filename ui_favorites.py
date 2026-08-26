@@ -6,6 +6,7 @@ decide manualmente cuál revisar a fondo con el botón "Ver detalle".
 """
 import streamlit as st
 import db
+import trading_hours
 from app_state import set_symbol
 
 
@@ -72,3 +73,27 @@ def render_favorites_panel(confirmed_list: list):
             value=st.session_state.get("notify_favorites", False),
             help="Solo notifica -- nunca cambia el símbolo en seguimiento ni navega por ti.",
         )
+
+    with st.expander("⏰ Horario de operación"):
+        st.caption(
+            "Restringe cuándo se ofrecen señales NUEVAS para aceptar y cuándo se mandan "
+            "alertas de entrada -- por ejemplo, para que no te ofrezca abrir nada mientras "
+            "duermes. Las operaciones YA abiertas se siguen vigilando sin importar la hora."
+        )
+        enabled, start, end, offset = trading_hours.get_settings()
+        th_enabled = st.checkbox("Activar restricción de horario", value=enabled, key="th_enabled")
+        thc1, thc2, thc3 = st.columns(3)
+        with thc1:
+            th_start = st.number_input("Hora inicio", min_value=0, max_value=23, value=start, key="th_start")
+        with thc2:
+            th_end = st.number_input("Hora fin", min_value=0, max_value=24, value=end, key="th_end")
+        with thc3:
+            th_offset = st.number_input("Tu huso horario (UTC±)", min_value=-12.0, max_value=14.0, value=offset, step=0.5, key="th_offset")
+        if st.button("Guardar horario"):
+            trading_hours.set_settings(th_enabled, int(th_start), int(th_end), th_offset)
+            st.success("Horario guardado.")
+            st.rerun()
+
+        within, msg = trading_hours.is_within_trading_hours()
+        if enabled:
+            st.caption("✅ Dentro de tu horario ahora mismo." if within else msg)
