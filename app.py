@@ -14,15 +14,18 @@ La lógica está repartida en módulos por responsabilidad:
   ui_operations.py        - operaciones en seguimiento
 
 UI organizada en pestañas: la pestaña "Señal" (la más usada) es la
-primera y no requiere abrir nada. Favoritos es una watchlist pasiva --
-solo lista señales confirmadas, nunca cambia el símbolo en seguimiento
-por su cuenta; el usuario elige manualmente cuál revisar a fondo.
+primera y no requiere abrir nada. "Seguimiento" tiene su propia pestaña
+dedicada (con el conteo de operaciones abiertas en el nombre) para
+acceso rápido sin tener que bajar por los gráficos. Favoritos es una
+watchlist pasiva -- solo lista señales confirmadas, nunca cambia el
+símbolo en seguimiento por su cuenta.
 """
 import time
 import streamlit as st
 
 import config
 import db
+import performance
 from app_state import init_session_state, setup_autorefresh, set_symbol
 from signal_service import get_data_and_signal
 from telegram_handler import process_telegram_commands
@@ -77,9 +80,21 @@ notify_favorites_signals(confirmed_favorites)
 # --- UI ---
 st.title("📊 Crypto Signal Dashboard")
 
-tab_signal, tab_favorites, tab_backtest, tab_backup = st.tabs(
-    ["📈 Señal", "⭐ Favoritos", "🧪 Backtest", "💾 Historial/Respaldo"]
+tab_signal, tab_tracking, tab_favorites, tab_backtest, tab_backup = st.tabs(
+    ["📈 Señal", f"📍 Seguimiento ({len(open_ops)})", "⭐ Favoritos", "🧪 Backtest", "💾 Historial/Respaldo"]
 )
+
+with tab_tracking:
+    if open_ops:
+        exposure = performance.build_report([], open_ops)
+        e1, e2, e3 = st.columns(3)
+        e1.metric("Operaciones abiertas", exposure["open_count"])
+        e2.metric("Monto total invertido", f"${exposure['total_invested_open']:.2f}")
+        e3.metric("Riesgo total en juego", f"${exposure['total_risk_usd_open']:.2f}")
+        st.divider()
+    render_operations_panel(open_ops)
+    if not open_ops:
+        st.info("No tienes operaciones en seguimiento ahora mismo. Acepta una señal confirmada desde la pestaña Señal para empezar a trackearla aquí.")
 
 with tab_favorites:
     render_favorites_panel(confirmed_favorites)
@@ -123,8 +138,6 @@ with tab_signal:
         render_charts(df, symbol)
     with col2:
         render_signal_panel(symbol, result, open_ops)
-
-    render_operations_panel(open_ops)
 
     st.divider()
     st.caption(
