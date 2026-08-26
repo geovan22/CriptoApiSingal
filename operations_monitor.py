@@ -1,6 +1,6 @@
 """
 Revisa operaciones en seguimiento (cierra solas al tocar TP/stop, avisa si
-el análisis se revierte) y la watchlist de favoritos (solo informativa).
+el análisis se revierte, trackea MAE/MFE) y la watchlist de favoritos.
 """
 import streamlit as st
 
@@ -15,10 +15,8 @@ from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
 
 def check_open_operations(open_ops: list):
     """
-    Para cada operación en seguimiento: si tocó TP o stop, la cierra y
-    registra el resultado. Si alcanzó 1x su riesgo original a favor, mueve
-    el stop a break-even (ya no puede perder). Si el análisis ahora
-    confirma la señal contraria, manda una alerta de salida temprana.
+    Para cada operación en seguimiento: trackea MAE/MFE, revisa si tocó
+    TP o stop, mueve a break-even si corresponde, y avisa reversiones.
     """
     for op in open_ops:
         try:
@@ -26,6 +24,18 @@ def check_open_operations(open_ops: list):
         except Exception:
             continue
         live_price = op_result["live_price"]
+
+        # --- Trackeo de MAE/MFE (precio más adverso/favorable visto) ---
+        prev_mfe = op.get("mfe_price") or op["entry"]
+        prev_mae = op.get("mae_price") or op["entry"]
+        if op["direction"] == "COMPRA":
+            new_mfe = max(prev_mfe, live_price)
+            new_mae = min(prev_mae, live_price)
+        else:
+            new_mfe = min(prev_mfe, live_price)
+            new_mae = max(prev_mae, live_price)
+        if new_mfe != prev_mfe or new_mae != prev_mae:
+            db.update_mae_mfe(op["id"], new_mfe, new_mae)
 
         hit_tp = (op["direction"] == "COMPRA" and live_price >= op["tp"]) or \
                  (op["direction"] == "VENTA" and live_price <= op["tp"])
@@ -44,9 +54,6 @@ def check_open_operations(open_ops: list):
                 send_telegram_message(TOKEN, CHAT_ID, f"🛑 *{op['symbol']}* tocó Stop Loss en ${format_price(live_price)}. Operación cerrada en el registro.")
             continue
 
-        # --- Break-even automático: si ya ganó 1x su riesgo original, el
-        # stop se mueve al precio de entrada -- de aquí en adelante la
-        # operación no puede terminar en pérdida. ---
         if not op.get("breakeven_applied"):
             risk_ref = op.get("initial_stop") or op["stop"]
             risk_distance = abs(op["entry"] - risk_ref)
@@ -62,7 +69,6 @@ def check_open_operations(open_ops: list):
                             f"esta operación ya no puede terminar en pérdida."
                         )
 
-        # --- Alerta de reversión ---
         if not op["early_warning_sent"]:
             opposite = "VENTA" if op["direction"] == "COMPRA" else "COMPRA"
             if op_result["signal"] == opposite and op_result["status"] == "confirmada":
@@ -78,13 +84,6 @@ def check_open_operations(open_ops: list):
 
 
 def get_confirmed_favorites_signals() -> list:
-    """
-    Revisa TODOS los favoritos y devuelve solo los que tienen una señal
-    CONFIRMADA (COMPRA o VENTA, sin advertencias, sin estar en formación,
-    sin estar filtrada por ADX/R:B). Es puramente informativo -- no cambia
-    el símbolo en seguimiento ni navega a ningún lado. El usuario decide
-    manualmente cuál revisar a fondo.
-    """
     results = []
     for fav_symbol in db.get_favorites():
         try:
@@ -97,11 +96,6 @@ def get_confirmed_favorites_signals() -> list:
 
 
 def notify_favorites_signals(confirmed_list: list):
-    """
-    Si el usuario activó las notificaciones de favoritos, manda una alerta
-    de Telegram por cada señal nueva de la lista (sin repetir la misma
-    mientras siga vigente). No cambia el símbolo en seguimiento.
-    """
     if not st.session_state.get("notify_favorites") or not (TOKEN and CHAT_ID) or not st.session_state.notifications_enabled:
         return
     if "sent_favorite_alerts" not in st.session_state:

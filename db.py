@@ -84,6 +84,8 @@ def init_db(default_symbols=None):
             "ALTER TABLE operations ADD COLUMN capital_at_entry REAL",
             "ALTER TABLE operations ADD COLUMN quantity REAL",
             "ALTER TABLE operations ADD COLUMN close_reason TEXT",
+            "ALTER TABLE operations ADD COLUMN mfe_price REAL",
+            "ALTER TABLE operations ADD COLUMN mae_price REAL",
         ]:
             try:
                 c.execute(stmt)
@@ -130,10 +132,11 @@ def create_operation(symbol, direction, entry, stop, tp, investment_amount=None,
     with _get_client() as c:
         rs = c.execute(
             "INSERT INTO operations (symbol, direction, entry, stop, tp, opened_at, status, "
-            "initial_stop, investment_amount, risk_pct_used, capital_at_entry, quantity) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?) RETURNING id",
+            "initial_stop, investment_amount, risk_pct_used, capital_at_entry, quantity, "
+            "mfe_price, mae_price) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             [symbol, direction, entry, stop, tp, datetime.now(timezone.utc).isoformat(), stop,
-             investment_amount, risk_pct_used, capital_at_entry, quantity],
+             investment_amount, risk_pct_used, capital_at_entry, quantity, entry, entry],
         )
         return rs.rows[0][0]
 
@@ -181,6 +184,21 @@ def apply_breakeven(op_id: int, new_stop: float):
         c.execute(
             "UPDATE operations SET stop = ?, breakeven_applied = 1 WHERE id = ?",
             [new_stop, op_id],
+        )
+
+
+def update_mae_mfe(op_id: int, mfe_price: float, mae_price: float):
+    """
+    Actualiza el precio más favorable (MFE) y más adverso (MAE) visto
+    durante la operación -- se llama en cada refresco mientras esté
+    abierta. Esto permite, al cerrar, saber si el stop fue demasiado
+    ancho/estrecho y si se capturó bien el movimiento a favor (práctica
+    estándar de trading profesional: MAE/MFE, Sweeney 1996).
+    """
+    with _get_client() as c:
+        c.execute(
+            "UPDATE operations SET mfe_price = ?, mae_price = ? WHERE id = ?",
+            [mfe_price, mae_price, op_id],
         )
 
 
