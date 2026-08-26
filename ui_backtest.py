@@ -69,12 +69,8 @@ def render_backtest_panel():
         "usa solo datos disponibles hasta ese momento. Sirve para ver si el sistema tiene "
         "ventaja estadística real antes de confiar en él con dinero en vivo."
     )
-    st.session_state.refresh_paused = st.checkbox(
-        "⏸️ Pausar refresco automático mientras uso esta sección",
-        value=st.session_state.refresh_paused,
-        help="Si tienes operaciones en seguimiento, el refresco cada 20s puede interrumpir un "
-             "backtest a la mitad antes de que termine. Actívalo antes de correr uno largo.",
-    )
+    if not st.session_state.refresh_paused:
+        st.caption("💡 Si vas a correr un backtest largo, activa \"⏸️ Pausar refresco\" arriba para que no se interrumpa a la mitad.")
     bt_strategy = st.radio(
         "Estrategia a probar", ["trend", "mean_reversion"],
         format_func=lambda s: "📈 Tendencia (sistema principal)" if s == "trend" else "🔄 Reversión a la media (Bollinger, solo ADX bajo)",

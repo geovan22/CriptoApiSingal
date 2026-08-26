@@ -1,6 +1,6 @@
 """
 Revisa operaciones en seguimiento (cierra solas al tocar TP/stop, avisa si
-el análisis se revierte, trackea MAE/MFE) y la watchlist de favoritos.
+el análisis se revierte) y la watchlist de favoritos.
 """
 import streamlit as st
 
@@ -14,10 +14,6 @@ from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
 
 
 def check_open_operations(open_ops: list):
-    """
-    Para cada operación en seguimiento: trackea MAE/MFE, revisa si tocó
-    TP o stop, mueve a break-even si corresponde, y avisa reversiones.
-    """
     for op in open_ops:
         try:
             _, op_result = get_data_and_signal(op["symbol"])
@@ -25,7 +21,6 @@ def check_open_operations(open_ops: list):
             continue
         live_price = op_result["live_price"]
 
-        # --- Trackeo de MAE/MFE (precio más adverso/favorable visto) ---
         prev_mfe = op.get("mfe_price") or op["entry"]
         prev_mae = op.get("mae_price") or op["entry"]
         if op["direction"] == "COMPRA":
@@ -83,9 +78,17 @@ def check_open_operations(open_ops: list):
                     )
 
 
-def get_confirmed_favorites_signals() -> list:
+def get_confirmed_favorites_signals(open_ops: list = None) -> list:
+    """
+    Excluye símbolos que ya tienen una operación abierta en seguimiento --
+    ya los estás vigilando en Seguimiento, no hace falta que también
+    aparezcan como "nueva oportunidad" en Favoritos.
+    """
+    symbols_in_tracking = {op["symbol"] for op in (open_ops or [])}
     results = []
     for fav_symbol in db.get_favorites():
+        if fav_symbol in symbols_in_tracking:
+            continue
         try:
             _, fav_result = get_data_and_signal(fav_symbol)
         except Exception:

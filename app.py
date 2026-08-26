@@ -1,24 +1,5 @@
 """
 Crypto Signal Dashboard -- punto de entrada.
-
-La lógica está repartida en módulos por responsabilidad:
-  app_state.py         - sesión, DB init, refresco dinámico
-  signal_service.py     - caché de datos + cálculo de señal
-  telegram_handler.py   - comandos entrantes de Telegram
-  operations_monitor.py - cierre automático, break-even, watchlist favoritos
-  ui_favorites.py        - panel de favoritos (watchlist pasiva)
-  ui_backtest.py          - panel de backtest
-  ui_backup.py            - panel de respaldo + historial
-  ui_charts.py            - gráficos
-  ui_signal_panel.py      - panel de señal + calculadora
-  ui_operations.py        - operaciones en seguimiento
-
-UI organizada en pestañas: la pestaña "Señal" (la más usada) es la
-primera y no requiere abrir nada. "Seguimiento" tiene su propia pestaña
-dedicada (con el conteo de operaciones abiertas en el nombre) para
-acceso rápido sin tener que bajar por los gráficos. Favoritos es una
-watchlist pasiva -- solo lista señales confirmadas, nunca cambia el
-símbolo en seguimiento por su cuenta.
 """
 import time
 import streamlit as st
@@ -39,7 +20,6 @@ from ui_operations import render_operations_panel
 
 st.set_page_config(page_title="Crypto Signal Dashboard", layout="wide", page_icon="📊")
 
-# --- Estilo moderno: tarjetas mas limpias, botones y metricas con mas aire ---
 st.markdown("""
 <style>
     div[data-testid="stMetric"] {
@@ -66,19 +46,24 @@ st.markdown("""
 db.init_db(default_symbols=config.AVAILABLE_SYMBOLS)
 init_session_state()
 
-# Una sola consulta de operaciones abiertas por refresco, compartida por
-# todos los módulos que la necesitan.
+top_col1, top_col2 = st.columns([3, 1])
+with top_col2:
+    st.session_state.refresh_paused = st.checkbox(
+        "⏸️ Pausar refresco",
+        value=st.session_state.refresh_paused,
+        help="Pausa el refresco automático en toda la app -- útil para backtests largos o para leer el historial sin que se recargue solo.",
+    )
+
 open_ops = db.get_open_operations()
 refresh_ms = setup_autorefresh(len(open_ops))
 
-# --- Procesos de fondo (corren en cada refresco) ---
 process_telegram_commands()
 check_open_operations(open_ops)
-confirmed_favorites = get_confirmed_favorites_signals()
+confirmed_favorites = get_confirmed_favorites_signals(open_ops)
 notify_favorites_signals(confirmed_favorites)
 
-# --- UI ---
-st.title("📊 Crypto Signal Dashboard")
+with top_col1:
+    st.title("📊 Crypto Signal Dashboard")
 
 tab_signal, tab_tracking, tab_favorites, tab_backtest, tab_backup = st.tabs(
     ["📈 Señal", f"📍 Seguimiento ({len(open_ops)})", "⭐ Favoritos", "🧪 Backtest", "💾 Historial/Respaldo"]
