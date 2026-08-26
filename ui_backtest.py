@@ -51,7 +51,16 @@ def _render_interpretation(stats: dict, label: str = ""):
         elif verdict == "por_debajo_equilibrio":
             st.error(f"🔴 Con esta muestra, todo el intervalo de confianza queda por DEBAJO del {be}% que necesitas para no perder dinero -- señal preocupante.")
         else:
-            st.warning(f"⚪ Indeterminado: tu intervalo de confianza cruza el {be}% que necesitas para no perder dinero -- con esta cantidad de datos, NO se puede afirmar si el sistema tiene ventaja o no. Necesitarías ~{interp['required_n_for_10pct_margin']} operaciones para saberlo con más certeza (tienes {interp['n_trades']}).")
+            if interp.get("already_reached_10pct"):
+                st.warning(
+                    f"⚪ Indeterminado, pero con mejor precisión: ya lograste un margen de ±{interp['achieved_margin_pct']}% "
+                    f"(mejor que ±10%), y aun así tu {be}% de equilibrio queda DENTRO del intervalo -- "
+                    f"el efecto real es pequeño y está genuinamente cerca del punto de equilibrio. "
+                    f"Necesitarías ~{interp['required_n_for_5pct_margin']} operaciones para un margen de ±5% "
+                    f"y separarlo con más confianza (tienes {interp['n_trades']})."
+                )
+            else:
+                st.warning(f"⚪ Indeterminado: tu intervalo de confianza cruza el {be}% que necesitas para no perder dinero -- con esta cantidad de datos, NO se puede afirmar si el sistema tiene ventaja o no. Necesitarías ~{interp['required_n_for_10pct_margin']} operaciones para saberlo con más certeza (tienes {interp['n_trades']}).")
 
 
 def render_backtest_panel():
@@ -66,6 +75,11 @@ def render_backtest_panel():
         help="Si tienes operaciones en seguimiento, el refresco cada 20s puede interrumpir un "
              "backtest a la mitad antes de que termine. Actívalo antes de correr uno largo.",
     )
+    bt_strategy = st.radio(
+        "Estrategia a probar", ["trend", "mean_reversion"],
+        format_func=lambda s: "📈 Tendencia (sistema principal)" if s == "trend" else "🔄 Reversión a la media (Bollinger, solo ADX bajo)",
+        horizontal=True, key="bt_strategy",
+    )
     bt_col1, bt_col2, bt_col3 = st.columns([1.5, 1, 1])
     with bt_col1:
         bt_symbol = st.selectbox("Símbolo a probar", config.AVAILABLE_SYMBOLS, key="bt_symbol")
@@ -78,8 +92,8 @@ def render_backtest_panel():
 
     if run_bt:
         try:
-            with st.spinner(f"Simulando {bt_limit} velas de {bt_symbol}..."):
-                trades, stats = backtest.run_backtest(bt_symbol, config.INTERVAL, limit=bt_limit)
+            with st.spinner(f"Simulando {bt_limit} velas de {bt_symbol} ({bt_strategy})..."):
+                trades, stats = backtest.run_backtest(bt_symbol, config.INTERVAL, limit=bt_limit, strategy=bt_strategy)
             st.session_state["bt_result"] = (bt_symbol, trades, stats)
             _save_result_to_db(bt_symbol, trades, stats)
         except Exception as e:
@@ -137,6 +151,11 @@ def render_backtest_panel():
         "Nota: las criptos suelen moverse correlacionadas entre sí, así que esto no es una "
         "muestra perfectamente independiente -- pero sigue siendo mejor que ver un símbolo solo."
     )
+    multi_strategy = st.radio(
+        "Estrategia a probar", ["trend", "mean_reversion"],
+        format_func=lambda s: "📈 Tendencia" if s == "trend" else "🔄 Reversión a la media",
+        horizontal=True, key="multi_strategy",
+    )
     multi_symbols = st.multiselect(
         "Símbolos a incluir", config.AVAILABLE_SYMBOLS,
         default=config.AVAILABLE_SYMBOLS[:15], key="multi_symbols",
@@ -155,7 +174,7 @@ def render_backtest_panel():
 
         try:
             all_trades, per_symbol, pooled_stats, errors = backtest.run_multi_symbol_backtest(
-                multi_symbols, config.INTERVAL, limit=multi_limit, progress_callback=_update_progress
+                multi_symbols, config.INTERVAL, limit=multi_limit, progress_callback=_update_progress, strategy=multi_strategy
             )
             st.session_state["multi_result"] = (all_trades, per_symbol, pooled_stats, errors)
         except Exception as e:
@@ -204,6 +223,11 @@ def render_backtest_panel():
         "Si el sistema tiene una ventaja real -- y no solo quedó ajustado al tramo que ya vimos -- "
         "los resultados de test no deberían verse muy distintos a los de train."
     )
+    oos_strategy = st.radio(
+        "Estrategia a validar", ["trend", "mean_reversion"],
+        format_func=lambda s: "📈 Tendencia" if s == "trend" else "🔄 Reversión a la media",
+        horizontal=True, key="oos_strategy",
+    )
     oos_col1, oos_col2 = st.columns([2, 1])
     with oos_col1:
         oos_symbol = st.selectbox("Símbolo a validar", config.AVAILABLE_SYMBOLS, key="oos_symbol")
@@ -215,7 +239,7 @@ def render_backtest_panel():
     if run_oos:
         try:
             with st.spinner(f"Validando {oos_symbol} (train/test)..."):
-                oos_result = backtest.run_out_of_sample_validation(oos_symbol, config.INTERVAL, total_limit=1400)
+                oos_result = backtest.run_out_of_sample_validation(oos_symbol, config.INTERVAL, total_limit=1400, strategy=oos_strategy)
             st.session_state["oos_result"] = (oos_symbol, oos_result)
         except Exception as e:
             st.error(f"No se pudo correr la validación: {e}")

@@ -15,11 +15,6 @@ IMPORTANTE:
 1) La señal se calcula usando solo velas YA CERRADAS.
 2) Confirmación de 2 velas antes de marcar "confirmada".
 3) Las razones se separan en "a favor" y "en conflicto".
-4) Filtros de calidad como PORTERO (ADX, R:B) -- bloquean, no solo avisan.
-5) TP multi-nivel (swing + Volume Profile), buscando el primero que cumpla el R:B mínimo.
-6) DI+/DI- y Stoch RSI se calculan y se EXPONEN como información adicional,
-   pero NO se usan en el puntaje -- para no alterar la lógica ya validada
-   con backtests. Antes se calculaban y se descartaban sin mostrarse nunca.
 """
 import pandas as pd
 import numpy as np
@@ -87,6 +82,94 @@ def pick_tp_with_min_rr(entry: float, stop: float, levels: list, above: bool, mi
         if reward / risk >= min_rr:
             return lvl
     return candidates[0] if candidates else None
+
+
+def evaluate_mean_reversion(df_full: pd.DataFrame) -> dict:
+    """
+    Estrategia COMPLEMENTARIA (no reemplaza ni mezcla pesos con el sistema
+    de tendencia) para el régimen que ADX bloquea por completo hoy:
+    mercado lateral (ADX < MIN_ADX_FOR_SIGNAL). Metodología validada
+    externamente: reversión a la media con Bollinger Bands (20,2) + vela
+    de rechazo dio profit factor 1.62 en BTC/USDT 4h en periodos laterales
+    (vs -0.74 en tendencia) según investigación de trading algorítmico.
+
+    Solo se activa cuando el propio ADX indica mercado lateral -- en
+    tendencia fuerte esta función no hace nada (deja el trabajo al
+    sistema principal). Independiente por diseño: usa su propio stop/TP
+    (target = banda media, no niveles de swing/Volume Profile) y respeta
+    los mismos topes de seguridad (MAX_STOP_PCT, MIN_RR_RATIO) que el
+    sistema principal para mantener la misma disciplina de riesgo.
+    """
+    live_price = df_full.iloc[-1]["close"]
+    df = only_closed_candles(df_full)
+    last = df.iloc[-1]
+
+    adx_val = last.get("adx14", 0)
+    if adx_val >= MIN_ADX_FOR_SIGNAL:
+        return {"active": False, "reason": "ADX no está en zona lateral -- el sistema de tendencia ya cubre este caso."}
+
+    bb_upper, bb_mid, bb_lower = last.get("bb_upper"), last.get("bb_mid"), last.get("bb_lower")
+    if pd.isna(bb_upper) or pd.isna(bb_lower) or pd.isna(bb_mid):
+        return {"active": False, "reason": "Bollinger Bands sin suficientes datos todavía."}
+
+    pattern = detect_engulfing(df)
+    price = last["close"]
+    atr_val = last.get("atr14", None)
+
+    signal = "ESPERA"
+    if last["low"] <= bb_lower and pattern == "alcista":
+        signal = "COMPRA"
+    elif last["high"] >= bb_upper and pattern == "bajista":
+        signal = "VENTA"
+
+    base = {
+        "active": True, "strategy": "mean_reversion", "price": price, "live_price": live_price,
+        "adx": round(adx_val, 1), "bb_upper": round(bb_upper, 6), "bb_mid": round(bb_mid, 6),
+        "bb_lower": round(bb_lower, 6), "pattern": pattern,
+    }
+
+    if signal == "ESPERA":
+        return {**base, "signal": "ESPERA", "status": "n/a"}
+
+    entry = price
+    buffer = (atr_val * 0.3) if atr_val else price * 0.002
+    stop_capped = False
+    if signal == "COMPRA":
+        stop = min(last["low"], entry) - buffer
+        max_stop_distance = entry * MAX_STOP_PCT
+        if (entry - stop) > max_stop_distance:
+            stop = entry - max_stop_distance
+            stop_capped = True
+        tp = pick_tp_with_min_rr(entry, stop, [bb_mid, bb_upper], above=True, min_rr=MIN_RR_RATIO)
+        if tp is None:
+            tp = entry * 1.03
+    else:
+        stop = max(last["high"], entry) + buffer
+        max_stop_distance = entry * MAX_STOP_PCT
+        if (stop - entry) > max_stop_distance:
+            stop = entry + max_stop_distance
+            stop_capped = True
+        tp = pick_tp_with_min_rr(entry, stop, [bb_mid, bb_lower], above=False, min_rr=MIN_RR_RATIO)
+        if tp is None:
+            tp = entry * 0.97
+
+    risk = abs(entry - stop)
+    reward = abs(tp - entry)
+    rr_ratio = (reward / risk) if risk > 0 else None
+    low_quality_rr = rr_ratio is not None and rr_ratio < MIN_RR_RATIO
+    status = "filtrada_rr" if low_quality_rr else "confirmada"
+
+    return {
+        **base,
+        "signal": signal,
+        "status": status,
+        "entry": entry,
+        "stop": stop,
+        "tp": tp,
+        "stop_capped": stop_capped,
+        "rr_ratio": round(rr_ratio, 2) if rr_ratio is not None else None,
+        "low_quality_rr": low_quality_rr,
+    }
 
 
 def get_daily_trend(df_1d: pd.DataFrame) -> str:

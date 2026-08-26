@@ -7,7 +7,7 @@ import streamlit as st
 import config
 from data_fetch import get_klines
 from indicators import add_all_indicators
-from signals import evaluate_signal, get_daily_trend
+from signals import evaluate_signal, get_daily_trend, evaluate_mean_reversion
 
 
 @st.cache_data(ttl=55, show_spinner=False)
@@ -32,3 +32,14 @@ def get_data_and_signal(symbol: str):
         trend_1d = None
     result = evaluate_signal(df, trend_1d=trend_1d)
     return df, result
+
+
+def get_mean_reversion_signal(symbol: str):
+    """
+    Señal del modo complementario de reversión a la media (solo activo en
+    mercado lateral). Reutiliza la misma caché de velas que el sistema
+    principal -- no hace descargas adicionales.
+    """
+    df = cached_klines(symbol, config.INTERVAL, 300)
+    df = add_all_indicators(df)
+    return evaluate_mean_reversion(df)

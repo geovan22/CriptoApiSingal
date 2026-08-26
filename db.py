@@ -4,24 +4,10 @@ Base de datos para favoritos, estado de la app, y operaciones en seguimiento.
 Dos modos, sin cambiar nada del resto del código:
 
 1. LOCAL (por defecto, sin configurar nada): guarda en un archivo
-   crypto_dashboard.db dentro del propio contenedor/teléfono. Funciona bien
-   en Termux. En Streamlit Cloud, sobrevive mientras la app siga corriendo,
-   pero un "Reboot" o redeploy grande puede borrarlo.
+   crypto_dashboard.db dentro del propio contenedor/teléfono.
 
-2. TURSO (recomendado para producción, gratis): si configuras
-   TURSO_DATABASE_URL y TURSO_AUTH_TOKEN (en config.py, igual que el token
-   de Telegram -- nunca hardcodeados en el repo), la base de datos vive en
-   la nube de Turso (basado en SQLite/libSQL) y sobrevive a cualquier
-   reinicio de Streamlit Cloud.
-
-Cómo activar el modo Turso (gratis, ~5 minutos):
-  1. Crea una cuenta en https://turso.tech
-  2. Crea una base de datos (botón "Create Database" en el dashboard)
-  3. Copia la "Database URL" (empieza con libsql://...)
-  4. Genera un "Auth Token" desde el dashboard de esa base de datos
-  5. Agrega esos dos valores como secrets (igual que hiciste con Telegram):
-     TURSO_DATABASE_URL = "libsql://tu-db-tu-usuario.turso.io"
-     TURSO_AUTH_TOKEN = "tu_token_aqui"
+2. TURSO (recomendado para producción, gratis): configura
+   TURSO_DATABASE_URL y TURSO_AUTH_TOKEN.
 """
 import json
 from datetime import datetime, timezone
@@ -86,6 +72,7 @@ def init_db(default_symbols=None):
             "ALTER TABLE operations ADD COLUMN close_reason TEXT",
             "ALTER TABLE operations ADD COLUMN mfe_price REAL",
             "ALTER TABLE operations ADD COLUMN mae_price REAL",
+            "ALTER TABLE operations ADD COLUMN strategy TEXT DEFAULT 'trend'",
         ]:
             try:
                 c.execute(stmt)
@@ -93,7 +80,6 @@ def init_db(default_symbols=None):
                 pass
 
 
-# --- Favoritos ---
 def get_favorites() -> list:
     with _get_client() as c:
         rs = c.execute("SELECT symbol FROM favorites ORDER BY symbol")
@@ -110,7 +96,6 @@ def remove_favorite(symbol: str):
         c.execute("DELETE FROM favorites WHERE symbol = ?", [symbol.upper()])
 
 
-# --- Estado simple ---
 def get_state(key: str, default=None):
     with _get_client() as c:
         rs = c.execute("SELECT value FROM app_state WHERE key = ?", [key])
@@ -126,17 +111,17 @@ def set_state(key: str, value: str):
         )
 
 
-# --- Operaciones en seguimiento ---
 def create_operation(symbol, direction, entry, stop, tp, investment_amount=None,
-                      risk_pct_used=None, capital_at_entry=None, quantity=None) -> int:
+                      risk_pct_used=None, capital_at_entry=None, quantity=None,
+                      strategy="trend") -> int:
     with _get_client() as c:
         rs = c.execute(
             "INSERT INTO operations (symbol, direction, entry, stop, tp, opened_at, status, "
             "initial_stop, investment_amount, risk_pct_used, capital_at_entry, quantity, "
-            "mfe_price, mae_price) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            "mfe_price, mae_price, strategy) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             [symbol, direction, entry, stop, tp, datetime.now(timezone.utc).isoformat(), stop,
-             investment_amount, risk_pct_used, capital_at_entry, quantity, entry, entry],
+             investment_amount, risk_pct_used, capital_at_entry, quantity, entry, entry, strategy],
         )
         return rs.rows[0][0]
 
@@ -178,8 +163,6 @@ def mark_early_warning_sent(op_id: int):
 
 
 def apply_breakeven(op_id: int, new_stop: float):
-    """Mueve el stop al precio de entrada (o cerca) una vez que la operación
-    alcanzó 1x su riesgo original -- desde ese punto ya no puede perder."""
     with _get_client() as c:
         c.execute(
             "UPDATE operations SET stop = ?, breakeven_applied = 1 WHERE id = ?",
@@ -188,13 +171,6 @@ def apply_breakeven(op_id: int, new_stop: float):
 
 
 def update_mae_mfe(op_id: int, mfe_price: float, mae_price: float):
-    """
-    Actualiza el precio más favorable (MFE) y más adverso (MAE) visto
-    durante la operación -- se llama en cada refresco mientras esté
-    abierta. Esto permite, al cerrar, saber si el stop fue demasiado
-    ancho/estrecho y si se capturó bien el movimiento a favor (práctica
-    estándar de trading profesional: MAE/MFE, Sweeney 1996).
-    """
     with _get_client() as c:
         c.execute(
             "UPDATE operations SET mfe_price = ?, mae_price = ? WHERE id = ?",
@@ -202,7 +178,6 @@ def update_mae_mfe(op_id: int, mfe_price: float, mae_price: float):
         )
 
 
-# --- Respaldo ---
 def export_backup() -> str:
     with _get_client() as c:
         favorites = [row[0] for row in c.execute("SELECT symbol FROM favorites").rows]

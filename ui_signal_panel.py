@@ -7,6 +7,7 @@ import config
 import db
 import risk_rules
 from price_format import format_price
+from signal_service import get_mean_reversion_signal
 from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
 
 
@@ -204,6 +205,72 @@ def _maybe_send_alert(symbol: str, signal: str, result: dict, alert_key: str):
             st.warning(f"No se pudo enviar Telegram: {info}")
 
 
+def _render_mean_reversion_panel(symbol: str, open_ops: list):
+    """
+    Modo COMPLEMENTARIO -- solo se activa cuando el sistema de tendencia
+    no opera por ADX bajo (mercado lateral). Metodología distinta
+    (Bollinger Bands + vela de rechazo), validada externamente para ese
+    régimen específico. Se muestra separado y claramente etiquetado para
+    no confundirse con la señal principal.
+    """
+    mr = get_mean_reversion_signal(symbol)
+    if not mr.get("active"):
+        return
+
+    st.divider()
+    st.markdown("### 🔄 Modo alternativo: reversión a la media")
+    st.caption(
+        f"Mercado lateral (ADX {mr['adx']}) -- el sistema de tendencia no opera aquí. "
+        "Esta es una estrategia distinta y separada, basada en Bollinger Bands + vela de "
+        "rechazo, validada para este tipo de régimen específicamente."
+    )
+
+    signal = mr.get("signal", "ESPERA")
+    if signal == "ESPERA":
+        st.info("Sin rechazo confirmado en las bandas todavía.")
+        return
+
+    color = "🟢" if signal == "COMPRA" else "🔴"
+    status_labels = {"confirmada": " ✅ confirmada", "filtrada_rr": " 🚫 filtrada (riesgo/beneficio pobre)"}
+    st.subheader(f"{color} {signal}{status_labels.get(mr['status'], '')}")
+    st.caption(f"Banda inferior {format_price(mr['bb_lower'])} · media {format_price(mr['bb_mid'])} · superior {format_price(mr['bb_upper'])}")
+
+    if mr["status"] != "confirmada":
+        if mr["status"] == "filtrada_rr":
+            st.caption(f"⛔ R:B ({mr.get('rr_ratio')}:1) por debajo del mínimo ({config.MIN_RR_RATIO}:1). No se ofrece como operable.")
+        return
+
+    st.code(f"Entrada: {format_price(mr['entry'])}", language=None)
+    st.code(f"Stop: {format_price(mr['stop'])}", language=None)
+    st.code(f"Take profit: {format_price(mr['tp'])}", language=None)
+    st.caption(f"Ratio riesgo/beneficio: 1:{mr['rr_ratio']}")
+
+    open_ops_this_symbol = [o for o in open_ops if o["symbol"] == symbol]
+    if open_ops_this_symbol:
+        st.caption(f"Ya tienes {len(open_ops_this_symbol)} operación(es) de {symbol} en seguimiento.")
+
+    in_cooldown, cooldown_msg = risk_rules.check_cooldown(symbol, signal)
+    if in_cooldown:
+        st.warning(cooldown_msg)
+        return
+
+    mr_capital = st.number_input("Capital disponible ($)", min_value=1.0, value=50.0, step=10.0, key=f"mr_capital_{symbol}")
+    mr_risk_pct = st.number_input("Riesgo por operación (%)", min_value=0.1, max_value=100.0, value=2.0, step=0.5, key=f"mr_risk_{symbol}")
+    stop_dist_pct = abs(mr["entry"] - mr["stop"]) / mr["entry"] if mr["entry"] else 0
+    suggested = round((mr_capital * mr_risk_pct / 100) / stop_dist_pct, 2) if stop_dist_pct > 0 else mr_capital
+    mr_investment = st.number_input("Monto a invertir ($)", min_value=1.0, value=suggested, step=10.0, key=f"mr_inv_{symbol}")
+    mr_qty = mr_investment / mr["entry"]
+
+    if st.button("✅ Aceptar reversión a la media", key=f"mr_accept_{symbol}"):
+        db.create_operation(
+            symbol, signal, mr["entry"], mr["stop"], mr["tp"],
+            investment_amount=mr_investment, risk_pct_used=mr_risk_pct,
+            capital_at_entry=mr_capital, quantity=mr_qty, strategy="mean_reversion",
+        )
+        st.success("Operación de reversión a la media en seguimiento (marcada por separado en el historial).")
+        st.rerun()
+
+
 def render_signal_panel(symbol: str, result: dict, open_ops: list):
     """Panel completo de la columna derecha: métricas, valores, calculadora, alerta."""
     _render_signal_metrics(result)
@@ -222,3 +289,5 @@ def render_signal_panel(symbol: str, result: dict, open_ops: list):
         remaining = _next_candle_close() - pd.Timestamp.now(tz="UTC")
         st.caption(f"⏱️ Próxima vela cierra en {_format_timedelta(remaining)} -- el análisis solo cambia al cerrar una vela.")
         st.session_state.last_alert = alert_key
+
+    _render_mean_reversion_panel(symbol, open_ops)
