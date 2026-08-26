@@ -1,4 +1,6 @@
-"""Panel de respaldo, restauración, historial, y desempeño real (vive dentro de una pestaña)."""
+"""Panel de respaldo, restauración, historial, y desempeño real -- organizado
+en pestañas internas (Desempeño / Respaldo / Cierres manuales / Historial)
+para no forzar scroll por 4 secciones largas apiladas."""
 import io
 import csv
 import streamlit as st
@@ -10,7 +12,6 @@ import post_close_review
 
 
 def _render_performance_report():
-    st.markdown("### 📈 Desempeño real (dinero de verdad, no backtest)")
     st.caption(
         "Medido en 'R' (múltiplos de lo que planeabas arriesgar), como hacen los traders "
         "profesionales -- permite comparar operaciones de distinto tamaño y símbolo en una "
@@ -40,9 +41,9 @@ def _render_performance_report():
                 dc3.metric("Tasa de captura", f"{report['avg_capture_rate']*100:.0f}%", help="Qué % del mejor movimiento posible (MFE) terminaste capturando realmente.")
 
             if report["avg_mfe_r"] > 0 and report["avg_capture_rate"] is not None and report["avg_capture_rate"] < 0.5:
-                st.info("💡 Tu tasa de captura es baja -- el precio suele llegar más lejos a tu favor de lo que terminas ganando. Podría valer la pena un take profit más ambicioso o un trailing stop, una vez tengas más operaciones para confirmarlo.")
+                st.info("💡 Tu tasa de captura es baja -- el precio suele llegar más lejos a tu favor de lo que terminas ganando.")
             if report["avg_mae_r"] > 0.8:
-                st.info("💡 El precio suele acercarse mucho a tu stop antes de recuperarse (MAE alto) -- si esto se repite con más datos, podría indicar que el stop está algo apretado para la volatilidad real.")
+                st.info("💡 El precio suele acercarse mucho a tu stop antes de recuperarse (MAE alto).")
 
         if report["equity_curve"]:
             with st.expander("Ver curva de equity (PnL acumulado en $)"):
@@ -62,14 +63,12 @@ def _render_performance_report():
         ec2.metric("Riesgo total en juego", f"${report['total_risk_usd_open']:.2f}")
         if report["total_risk_usd_open"] > 0:
             st.caption(
-                "Suma del riesgo planeado (capital × % de riesgo) de TODAS tus operaciones abiertas a la vez. "
-                "Si esta suma supera ~6-10% de tu capital total, estás arriesgando más de lo recomendado en conjunto, "
-                "aunque cada operación individual se vea conservadora."
+                "Suma del riesgo planeado de TODAS tus operaciones abiertas a la vez. "
+                "Si supera ~6-10% de tu capital total, estás arriesgando más de lo recomendado en conjunto."
             )
 
 
 def _operations_to_csv() -> str:
-    """Junta operaciones abiertas + cerradas en un CSV listo para Excel/Sheets."""
     all_ops = db.get_open_operations() + db.get_operation_history(1000)
     if not all_ops:
         return ""
@@ -88,81 +87,82 @@ def _operations_to_csv() -> str:
 
 
 def render_backup_panel():
-    _render_performance_report()
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Desempeño", "💾 Respaldo", "🔍 Cierres manuales", "📜 Historial"])
 
-    st.divider()
-    db_mode = "☁️ Turso (persistente en la nube)" if config.TURSO_DATABASE_URL else "💻 Local (puede perderse si Streamlit Cloud reinicia el contenedor)"
-    st.caption(f"Modo de base de datos: **{db_mode}**")
-    if not config.TURSO_DATABASE_URL:
+    with tab1:
+        _render_performance_report()
+
+    with tab2:
+        db_mode = "☁️ Turso (persistente en la nube)" if config.TURSO_DATABASE_URL else "💻 Local (puede perderse si Streamlit Cloud reinicia el contenedor)"
+        st.caption(f"Modo de base de datos: **{db_mode}**")
+        if not config.TURSO_DATABASE_URL:
+            st.caption(
+                "El disco de Streamlit Cloud puede reiniciarse. Descarga un respaldo de vez en cuando, "
+                "o configura Turso (gratis) para que sea permanente."
+            )
+        st.download_button("Descargar respaldo (JSON)", db.export_backup(), file_name="crypto_dashboard_backup.json")
+        csv_data = _operations_to_csv()
+        if csv_data:
+            st.download_button(
+                "📄 Descargar operaciones (CSV, para Excel/Sheets)", csv_data,
+                file_name="operaciones.csv", mime="text/csv",
+            )
+        uploaded = st.file_uploader("Restaurar desde respaldo", type="json", key="restore_upload")
+        if uploaded and st.button("Restaurar"):
+            db.import_backup(uploaded.read().decode("utf-8"))
+            st.success("Respaldo restaurado.")
+            st.rerun()
+
+    with tab3:
         st.caption(
-            "El disco de Streamlit Cloud puede reiniciarse. Descarga un respaldo de vez en cuando "
-            "para no perder tus favoritos ni tu historial de operaciones, o configura Turso "
-            "(gratis) para que sea permanente -- ver instrucciones al inicio de db.py."
+            "Para cada operación que cerraste tú mismo, simula qué habría pasado si la hubieras "
+            "dejado correr -- para saber si tus cierres manuales están ayudando o quitándole ganancia al sistema."
         )
-    st.download_button("Descargar respaldo (JSON)", db.export_backup(), file_name="crypto_dashboard_backup.json")
-    csv_data = _operations_to_csv()
-    if csv_data:
-        st.download_button(
-            "📄 Descargar operaciones (CSV, para Excel/Sheets)", csv_data,
-            file_name="operaciones.csv", mime="text/csv",
-        )
-    uploaded = st.file_uploader("Restaurar desde respaldo", type="json", key="restore_upload")
-    if uploaded and st.button("Restaurar"):
-        db.import_backup(uploaded.read().decode("utf-8"))
-        st.success("Respaldo restaurado.")
-        st.rerun()
+        if st.button("🔬 Analizar mis cierres manuales"):
+            with st.spinner("Simulando qué hubiera pasado..."):
+                closed_ops = db.get_operation_history(200)
+                reviews = post_close_review.review_manual_closes(closed_ops)
+            st.session_state["manual_review"] = reviews
 
-    st.divider()
-    st.markdown("### 🔍 Revisión de cierres manuales")
-    st.caption(
-        "Para cada operación que cerraste tú mismo (no por TP/stop automático), simula qué "
-        "habría pasado si la hubieras dejado correr -- para saber si tus cierres manuales están "
-        "ayudando o quitándole ganancia al sistema."
-    )
-    if st.button("🔬 Analizar mis cierres manuales"):
-        with st.spinner("Simulando qué hubiera pasado..."):
-            closed_ops = db.get_operation_history(200)
-            reviews = post_close_review.review_manual_closes(closed_ops)
-        st.session_state["manual_review"] = reviews
+        if "manual_review" in st.session_state:
+            reviews = st.session_state["manual_review"]
+            if not reviews:
+                st.info("No hay operaciones cerradas manualmente para analizar todavía.")
+            else:
+                better, worse, same = 0, 0, 0
+                for r in reviews:
+                    actual = r["actual_pnl_pct"] or 0
+                    sim = r["sim_pnl_pct"]
+                    diff = actual - sim
+                    if abs(diff) < 0.1:
+                        same += 1
+                        tag = "⚪ Similar"
+                    elif diff > 0:
+                        better += 1
+                        tag = "✅ Cerrar manual fue MEJOR"
+                    else:
+                        worse += 1
+                        tag = "🔴 Cerrar manual fue PEOR"
 
-    if "manual_review" in st.session_state:
-        reviews = st.session_state["manual_review"]
-        if not reviews:
-            st.info("No hay operaciones cerradas manualmente para analizar todavía.")
+                    outcome_label = {"tp": "habría tocado TP", "stop": "habría tocado stop", "sigue_abierta": "seguiría abierta hoy"}[r["sim_outcome"]]
+                    with st.container(border=True):
+                        st.write(f"**{r['symbol']} {r['direction']}** -- {tag}")
+                        st.caption(f"Real: {actual:+.2f}% · Si no la tocabas: {outcome_label} con {sim:+.2f}% ({r['sim_bars']} velas después)")
+
+                st.caption(f"Resumen: {better} veces mejor cerrar manual, {worse} veces peor, {same} similar -- de {len(reviews)} operaciones analizadas.")
+
+    with tab4:
+        history = db.get_operation_history(15)
+        if history:
+            wins = sum(1 for h in history if h["pnl_pct"] and h["pnl_pct"] > 0)
+            st.caption(f"{wins}/{len(history)} operaciones ganadoras (últimas {len(history)})")
+            for h in history:
+                is_win = h["pnl_pct"] and h["pnl_pct"] > 0
+                color = "#16a34a" if is_win else "#dc2626"
+                emoji = "🟢" if is_win else "🔴"
+                reason = h.get("close_reason") or h["outcome"]
+                with st.container(border=True):
+                    st.markdown(f"<span style='color:{color}; font-weight:700;'>{emoji} {h['symbol']} {h['direction']}</span>", unsafe_allow_html=True)
+                    st.caption(f"{reason} · {h['pnl_pct']:+.2f}%")
         else:
-            better, worse, same = 0, 0, 0
-            for r in reviews:
-                actual = r["actual_pnl_pct"] or 0
-                sim = r["sim_pnl_pct"]
-                diff = actual - sim
-                if abs(diff) < 0.1:
-                    same += 1
-                    tag = "⚪ Similar"
-                elif diff > 0:
-                    better += 1
-                    tag = "✅ Cerrar manual fue MEJOR"
-                else:
-                    worse += 1
-                    tag = "🔴 Cerrar manual fue PEOR"
-
-                outcome_label = {"tp": "habría tocado TP", "stop": "habría tocado stop", "sigue_abierta": "seguiría abierta hoy"}[r["sim_outcome"]]
-                st.write(
-                    f"**{r['symbol']} {r['direction']}** -- {tag}\n\n"
-                    f"Real: {actual:+.2f}% · Si no la tocabas: {outcome_label} con {sim:+.2f}% "
-                    f"({r['sim_bars']} velas después)"
-                )
-                st.divider()
-
-            st.caption(f"Resumen: {better} veces mejor cerrar manual, {worse} veces peor, {same} similar -- de {len(reviews)} operaciones analizadas.")
-
-    st.divider()
-    history = db.get_operation_history(15)
-    if history:
-        wins = sum(1 for h in history if h["pnl_pct"] and h["pnl_pct"] > 0)
-        st.write(f"**Historial** -- {wins}/{len(history)} operaciones ganadoras (últimas {len(history)})")
-        for h in history:
-            emoji = "🟢" if h["pnl_pct"] and h["pnl_pct"] > 0 else "🔴"
-            reason = h.get("close_reason") or h["outcome"]
-            st.write(f"{emoji} {h['symbol']} {h['direction']} · {reason} · {h['pnl_pct']:+.2f}%")
-    else:
-        st.caption("Todavía no hay operaciones cerradas en el historial.")
+            st.caption("Todavía no hay operaciones cerradas en el historial.")

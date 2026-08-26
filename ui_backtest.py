@@ -1,4 +1,6 @@
-"""Panel de backtest -- prueba el sistema con datos históricos, con resultados persistidos en DB."""
+"""Panel de backtest -- prueba el sistema con datos históricos, con resultados persistidos en DB.
+Las 3 secciones (individual, combinado, fuera de muestra) viven en pestañas
+internas para no forzar scroll por todo, ya que en móvil se apilan."""
 import json
 import pandas as pd
 import streamlit as st
@@ -63,11 +65,10 @@ def _render_interpretation(stats: dict, label: str = ""):
                 st.warning(f"⚪ Indeterminado: tu intervalo de confianza cruza el {be}% que necesitas para no perder dinero -- con esta cantidad de datos, NO se puede afirmar si el sistema tiene ventaja o no. Necesitarías ~{interp['required_n_for_10pct_margin']} operaciones para saberlo con más certeza (tienes {interp['n_trades']}).")
 
 
-def render_backtest_panel():
+def _render_individual_backtest():
     st.caption(
         "Corre la lógica exacta de señales sobre velas pasadas, sin trampas -- cada decisión "
-        "usa solo datos disponibles hasta ese momento. Sirve para ver si el sistema tiene "
-        "ventaja estadística real antes de confiar en él con dinero en vivo."
+        "usa solo datos disponibles hasta ese momento."
     )
     if not st.session_state.refresh_paused:
         st.caption("💡 Si vas a correr un backtest largo, activa \"⏸️ Pausar refresco\" arriba para que no se interrumpa a la mitad.")
@@ -138,14 +139,12 @@ def render_backtest_panel():
                         f"({t['pnl_pct']:+.2f}%, {t['bars_held']} velas)"
                     )
 
-    st.divider()
-    st.markdown("### 📊 Análisis combinado (todos los símbolos)")
+
+def _render_multi_symbol():
     st.caption(
         "Corre el backtest en varios símbolos a la vez y junta TODAS las operaciones en una "
         "sola muestra -- llega mucho más rápido al mínimo de ~100 operaciones que hace falta "
-        "para conclusiones confiables, en vez de esperar semanas con un solo símbolo. "
-        "Nota: las criptos suelen moverse correlacionadas entre sí, así que esto no es una "
-        "muestra perfectamente independiente -- pero sigue siendo mejor que ver un símbolo solo."
+        "para conclusiones confiables. Nota: las criptos suelen moverse correlacionadas entre sí."
     )
     multi_strategy = st.radio(
         "Estrategia a probar", ["trend", "mean_reversion"],
@@ -196,8 +195,7 @@ def render_backtest_panel():
             m4.metric("Drawdown máx.", f"{pooled_stats['max_drawdown_pct']:.2f}%")
             st.caption(
                 "⚠️ El drawdown combinado asume una sola cuenta rotando capital completo entre "
-                "operaciones en orden cronológico -- simplificación razonable, pero en la vida real "
-                "varias de estas operaciones (de distintos símbolos) podrían solaparse en el tiempo."
+                "operaciones en orden cronológico -- en la vida real varias podrían solaparse en el tiempo."
             )
 
             st.markdown("**📐 Interpretación estadística (muestra combinada)**")
@@ -211,13 +209,11 @@ def render_backtest_panel():
                         emoji = "🟢" if s["expectancy_pct"] > 0 else "🔴"
                         st.write(f"{emoji} **{sym}**: {s['n_trades']} op. · win rate {s['win_rate']}% · expectativa {s['expectancy_pct']:+.2f}%")
 
-    st.divider()
-    st.markdown("### 🔬 Validación fuera de muestra (walk-forward)")
+
+def _render_out_of_sample():
     st.caption(
         "Divide el histórico en dos partes cronológicas: la primera mitad (train) es la que hemos "
-        "estado mirando para ajustar el sistema; la segunda (test) NUNCA se usó para decidir nada. "
-        "Si el sistema tiene una ventaja real -- y no solo quedó ajustado al tramo que ya vimos -- "
-        "los resultados de test no deberían verse muy distintos a los de train."
+        "estado mirando para ajustar el sistema; la segunda (test) NUNCA se usó para decidir nada."
     )
     oos_strategy = st.radio(
         "Estrategia a validar", ["trend", "mean_reversion"],
@@ -279,22 +275,29 @@ def render_backtest_panel():
             elif test_exp < 0 and train_exp > 0:
                 st.error(
                     "⚠️ El sistema fue rentable en el tramo que ya observamos (train) pero perdió dinero "
-                    "en el tramo nunca visto (test) -- señal clásica de sobreajuste. Los parámetros "
-                    "actuales podrían estar ajustados al ruido del tramo que miramos, no a una ventaja real."
+                    "en el tramo nunca visto (test) -- señal clásica de sobreajuste."
                 )
             elif train_exp <= 0 and test_exp > 0:
                 st.info(
                     "ℹ️ Train fue negativo pero test resultó positivo -- con muestras tan chicas esto es "
-                    "más probable que sea variación normal que una mejora real. No es evidencia sólida "
-                    "en ningún sentido todavía."
+                    "más probable que sea variación normal que una mejora real."
                 )
             elif test_exp < train_exp * 0.3:
                 st.warning(
                     "⚠️ El rendimiento en test es considerablemente más débil que en train -- vale la "
-                    "pena tomar los resultados de train con cautela y no seguir ajustando parámetros "
-                    "mirando solo ese tramo."
+                    "pena tomar los resultados de train con cautela."
                 )
             else:
                 st.success("✅ El desempeño en test es razonablemente consistente con train -- buena señal de que no es puro sobreajuste.")
         else:
-            st.info("Pocas operaciones en alguno de los dos tramos para sacar una conclusión firme -- prueba con más velas (total_limit) si quieres más muestra.")
+            st.info("Pocas operaciones en alguno de los dos tramos para sacar una conclusión firme.")
+
+
+def render_backtest_panel():
+    tab1, tab2, tab3 = st.tabs(["▶️ Individual", "📊 Combinado", "🔬 Fuera de muestra"])
+    with tab1:
+        _render_individual_backtest()
+    with tab2:
+        _render_multi_symbol()
+    with tab3:
+        _render_out_of_sample()

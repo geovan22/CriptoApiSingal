@@ -118,11 +118,11 @@ with tab_signal:
         st.error(f"Error obteniendo datos de {symbol}: {e}")
         st.stop()
 
-    col1, col2 = st.columns([3, 1])
+    col1, col2 = st.tabs(["📋 Análisis", "📊 Gráficos"])
     with col1:
-        render_charts(df, symbol)
-    with col2:
         render_signal_panel(symbol, result, open_ops)
+    with col2:
+        render_charts(df, symbol)
 
     st.divider()
     st.caption(

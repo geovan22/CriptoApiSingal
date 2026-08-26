@@ -50,23 +50,29 @@ def _render_signal_metrics(result: dict):
     if result["status"] == "filtrada_rr":
         st.caption(f"⛔ Cumplió el puntaje de confluencia, pero el ratio riesgo/beneficio ({result['rr_ratio']}:1) está por debajo del mínimo ({config.MIN_RR_RATIO}:1). No se ofrece como operable.")
 
-    st.write(f"**MACD:** {result['macd_state']}")
-    st.write(f"**RSI 14:** {result['rsi']} ({result['rsi_zone']})")
-    st.write(f"**PVT:** {result['pvt_confirm']}")
-    st.write(f"**Delta:** {result['delta_state']} ({result['delta_pct']}%)")
-    if result.get("trend_1d"):
-        st.write(f"**Tendencia 1D:** {result['trend_1d']}")
-    st.write(f"**ADX:** {result['adx']} ({result['trend_strength']}, dirección DI: {result.get('di_direction', '—')})")
+    # Cuadrícula compacta: 4 métricas por fila en vez de una línea por dato
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("RSI 14", result["rsi"], result["rsi_zone"])
+    g2.metric("ADX", result["adx"], result["trend_strength"])
     if result.get("stoch_k") is not None:
-        st.write(f"**Stoch RSI:** {result['stoch_k']}")
+        g3.metric("Stoch RSI", result["stoch_k"])
+    g4.metric("Delta", f"{result['delta_pct']}%", "comprador" if "comprador" in result["delta_state"] else "vendedor" if "vendedor" in result["delta_state"] else "equilibrado")
+
+    extra_bits = [f"MACD {result['macd_state']}", f"PVT {result['pvt_confirm']}", f"DI {result.get('di_direction', '—')}"]
+    if result.get("trend_1d"):
+        extra_bits.append(f"1D {result['trend_1d']}")
+    st.caption(" · ".join(extra_bits))
     if result["trend_strength"] == "lateral/débil":
         st.caption("⚠️ Mercado sin tendencia clara -- las señales de MACD/EMA son menos fiables ahora.")
     if result.get("pattern"):
-        st.write(f"**Patrón de velas:** envolvente {result['pattern']}")
-    if result["support"]:
-        st.write(f"**Soporte cercano:** {format_price(result['support'])}")
-    if result["resistance"]:
-        st.write(f"**Resistencia cercana:** {format_price(result['resistance'])}")
+        st.caption(f"Patrón de velas: envolvente {result['pattern']}")
+
+    if result["support"] or result["resistance"]:
+        lvl1, lvl2 = st.columns(2)
+        if result["support"]:
+            lvl1.metric("Soporte cercano", format_price(result["support"]))
+        if result["resistance"]:
+            lvl2.metric("Resistencia cercana", format_price(result["resistance"]))
     vp = result.get("volume_profile")
     if vp:
         st.caption(f"📊 Volume Profile: POC {format_price(vp['poc'])} · VAH {format_price(vp['vah'])} · VAL {format_price(vp['val'])}")
