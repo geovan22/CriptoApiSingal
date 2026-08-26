@@ -143,17 +143,19 @@ def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str) -
 
     suggested_investment = (capital * risk_pct / 100) / stop_distance_pct if stop_distance_pct > 0 else capital
     suggested_investment = round(suggested_investment, 2)
-
-    investment = st.number_input(
-        "Monto a invertir ($)", min_value=1.0, value=suggested_investment, step=10.0,
-        key=f"investment_input_{alert_key}",
-    )
     max_loss_if_default = capital * risk_pct / 100
-    st.caption(
-        f"💡 Sugerido para arriesgar {risk_pct:.1f}% de tu capital (${max_loss_if_default:.2f}) "
-        f"si toca el stop, según la distancia real de este stop ({stop_distance_pct*100:.2f}%). "
-        f"Puedes cambiarlo, pero montos más altos arriesgan más de tu capital real."
-    )
+
+    st.metric("💡 Monto recomendado", f"${suggested_investment:.2f}", help=f"Para arriesgar {risk_pct:.1f}% de tu capital (${max_loss_if_default:.2f}) según la distancia real de este stop ({stop_distance_pct*100:.2f}%).")
+
+    use_custom = st.checkbox("✏️ Usar un monto distinto al recomendado", key=f"custom_toggle_{alert_key}")
+    if use_custom:
+        investment = st.number_input(
+            "Monto a invertir ($)", min_value=1.0, value=suggested_investment, step=10.0,
+            key=f"custom_investment_{alert_key}",
+        )
+    else:
+        investment = suggested_investment
+        st.caption(f"Se usará el monto recomendado: ${investment:.2f}")
 
     qty = investment / entry
 
@@ -168,6 +170,12 @@ def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str) -
     loss_pct = (loss_usd / investment) * 100 if investment else 0
     implied_leverage = investment / capital if capital else 0
     rr_ratio = (profit_usd / loss_usd) if loss_usd else 0
+
+    lev_col1, lev_col2 = st.columns(2)
+    with lev_col1:
+        st.metric("Monto a invertir (final)", f"${investment:.2f}")
+    with lev_col2:
+        st.metric("Apalancamiento implícito", f"{implied_leverage:.1f}x")
 
     pnl_col1, pnl_col2 = st.columns(2)
     with pnl_col1:
