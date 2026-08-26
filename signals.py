@@ -92,13 +92,6 @@ def evaluate_mean_reversion(df_full: pd.DataFrame) -> dict:
     externamente: reversión a la media con Bollinger Bands (20,2) + vela
     de rechazo dio profit factor 1.62 en BTC/USDT 4h en periodos laterales
     (vs -0.74 en tendencia) según investigación de trading algorítmico.
-
-    Solo se activa cuando el propio ADX indica mercado lateral -- en
-    tendencia fuerte esta función no hace nada (deja el trabajo al
-    sistema principal). Independiente por diseño: usa su propio stop/TP
-    (target = banda media, no niveles de swing/Volume Profile) y respeta
-    los mismos topes de seguridad (MAX_STOP_PCT, MIN_RR_RATIO) que el
-    sistema principal para mantener la misma disciplina de riesgo.
     """
     live_price = df_full.iloc[-1]["close"]
     df = only_closed_candles(df_full)
@@ -132,10 +125,11 @@ def evaluate_mean_reversion(df_full: pd.DataFrame) -> dict:
         return {**base, "signal": "ESPERA", "status": "n/a"}
 
     entry = price
-    buffer = (atr_val * 0.3) if atr_val else price * 0.002
+    recent = df.tail(3)
+    buffer = atr_val if atr_val else price * 0.006
     stop_capped = False
     if signal == "COMPRA":
-        stop = min(last["low"], entry) - buffer
+        stop = min(recent["low"].min(), entry) - buffer
         max_stop_distance = entry * MAX_STOP_PCT
         if (entry - stop) > max_stop_distance:
             stop = entry - max_stop_distance
@@ -144,7 +138,7 @@ def evaluate_mean_reversion(df_full: pd.DataFrame) -> dict:
         if tp is None:
             tp = entry * 1.03
     else:
-        stop = max(last["high"], entry) + buffer
+        stop = max(recent["high"].max(), entry) + buffer
         max_stop_distance = entry * MAX_STOP_PCT
         if (stop - entry) > max_stop_distance:
             stop = entry + max_stop_distance
