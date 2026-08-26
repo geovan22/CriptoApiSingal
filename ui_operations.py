@@ -100,6 +100,29 @@ def render_operations_panel(open_ops: list):
                     )
                 st.progress(progress, text=f"{progress*100:.0f}% hacia el take profit")
 
+                with st.expander("✏️ Editar monto/riesgo (corrige el registro para análisis)"):
+                    ec1, ec2, ec3 = st.columns(3)
+                    with ec1:
+                        edit_capital = st.number_input(
+                            "Capital ($)", min_value=1.0,
+                            value=float(op.get("capital_at_entry") or 50.0), step=10.0, key=f"edit_cap_{op['id']}",
+                        )
+                    with ec2:
+                        edit_risk = st.number_input(
+                            "Riesgo (%)", min_value=0.1, max_value=100.0,
+                            value=float(op.get("risk_pct_used") or 2.0), step=0.5, key=f"edit_risk_{op['id']}",
+                        )
+                    with ec3:
+                        edit_investment = st.number_input(
+                            "Monto invertido ($)", min_value=1.0,
+                            value=float(op.get("investment_amount") or 50.0), step=10.0, key=f"edit_inv_{op['id']}",
+                        )
+                    if st.button("💾 Guardar cambios", key=f"save_edit_{op['id']}"):
+                        new_qty = edit_investment / op["entry"]
+                        db.update_operation_investment(op["id"], edit_investment, edit_risk, edit_capital, new_qty)
+                        st.success("Datos actualizados.")
+                        st.rerun()
+
                 if st.button("🏁 Finalizar", key=f"finish_{op['id']}"):
                     reason = "manual_tras_alerta" if op.get("early_warning_sent") else "manual"
                     db.close_operation(op["id"], live, "manual", close_reason=reason)

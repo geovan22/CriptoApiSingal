@@ -170,6 +170,21 @@ def apply_breakeven(op_id: int, new_stop: float):
         )
 
 
+def update_operation_investment(op_id: int, investment_amount: float, risk_pct_used: float,
+                                 capital_at_entry: float, quantity: float):
+    """
+    Permite corregir el monto invertido, % de riesgo, capital y cantidad
+    de una operación YA creada (abierta o cerrada) -- útil si se aceptó
+    con el monto recomendado por error, o para dejar el registro fiel
+    a lo que realmente se invirtió, de cara al análisis posterior.
+    """
+    with _get_client() as c:
+        c.execute(
+            "UPDATE operations SET investment_amount=?, risk_pct_used=?, capital_at_entry=?, quantity=? WHERE id=?",
+            [investment_amount, risk_pct_used, capital_at_entry, quantity, op_id],
+        )
+
+
 def update_mae_mfe(op_id: int, mfe_price: float, mae_price: float):
     with _get_client() as c:
         c.execute(
