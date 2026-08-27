@@ -43,8 +43,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-db.init_db(default_symbols=config.AVAILABLE_SYMBOLS)
+if "db_initialized" not in st.session_state:
+    db.init_db(default_symbols=config.AVAILABLE_SYMBOLS)
+    st.session_state.db_initialized = True
 init_session_state()
+
+config.INTERVAL = db.get_state("selected_interval", config.INTERVAL)
 
 top_col1, top_col2 = st.columns([3, 1])
 with top_col2:
@@ -91,7 +95,7 @@ with tab_backup:
     render_backup_panel()
 
 with tab_signal:
-    col_sel, col_info = st.columns([1, 2])
+    col_sel, col_tf, col_info = st.columns([1, 1, 2])
     with col_sel:
         options = config.AVAILABLE_SYMBOLS.copy()
         if st.session_state.symbol not in options:
@@ -99,6 +103,16 @@ with tab_signal:
         chosen = st.selectbox("Cripto en seguimiento", options, index=options.index(st.session_state.symbol))
         if chosen != st.session_state.symbol:
             set_symbol(chosen)
+
+    with col_tf:
+        tf_options = config.AVAILABLE_INTERVALS.copy()
+        if config.INTERVAL not in tf_options:
+            tf_options.append(config.INTERVAL)
+        chosen_tf = st.selectbox("Timeframe", tf_options, index=tf_options.index(config.INTERVAL))
+        if chosen_tf != config.INTERVAL:
+            config.INTERVAL = chosen_tf
+            db.set_state("selected_interval", chosen_tf)
+            st.rerun()
 
     with col_info:
         estado = "🟢 Activas" if st.session_state.notifications_enabled else "🔴 Pausadas"

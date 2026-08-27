@@ -34,79 +34,48 @@ DEFAULT_SYMBOL = "BTCUSDT"
 
 # Opciones sugeridas en el selector de la web (puedes escribir cualquier
 # otro par de Binance manualmente, no está limitado a esta lista).
-#
-# Nota: esto es una lista de las criptos MÁS LÍQUIDAS y con mayor volumen
-# en Binance -- no una promesa de rentabilidad (ninguna cripto lo es).
-# Mayor liquidez importa para esta herramienta porque hace que los niveles
-# de soporte/resistencia, delta y PVT sean más confiables (spreads más
-# ajustados, menos manipulación de precio por operadores pequeños).
 AVAILABLE_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
     "LTCUSDT", "TRXUSDT", "TONUSDT", "NEARUSDT", "SUIUSDT",
     "APTUSDT", "ARBUSDT", "OPUSDT", "POLUSDT", "BCHUSDT",
-    # Ampliación para el análisis combinado (más muestra, más diversidad):
     "ATOMUSDT", "ICPUSDT", "FILUSDT", "INJUSDT", "RENDERUSDT",
-    "SHIBUSDT", "PEPEUSDT",  # estos dos son mucho más volátiles -- útil
-    # para ver si la ventaja observada en ADA/SOL se relaciona con volatilidad.
+    "SHIBUSDT", "PEPEUSDT",
 ]
 
-# Temporalidad (4h: buen balance entre calidad de señal y ruido,
-# consistente con el análisis manual que ya veníamos haciendo en el chat)
+# Temporalidad por defecto (el usuario puede cambiarla desde la UI --
+# ver AVAILABLE_INTERVALS y get_interval_hours() abajo -- y queda guardada
+# en la base de datos para la próxima vez que abra la app).
 INTERVAL = "4h"
 
+# Timeframes disponibles para seleccionar en la UI (formato Binance)
+AVAILABLE_INTERVALS = ["15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"]
+
+
+def get_interval_hours() -> float:
+    """Convierte el INTERVAL actual (ej. '4h', '1d', '15m') a horas."""
+    s = INTERVAL
+    if s.endswith("m"):
+        return float(s[:-1]) / 60
+    if s.endswith("h"):
+        return float(s[:-1])
+    if s.endswith("d"):
+        return float(s[:-1]) * 24
+    return 4.0
+
 # Velas de "enfriamiento" tras un stop-loss antes de volver a permitir
-# señal en el MISMO símbolo y MISMA dirección. Práctica estándar en
-# trading algorítmico para evitar "revenge trading" automatizado --
-# reentrar de inmediato en la misma trampa que acaba de fallar.
-# 2 velas de 4h = 8 horas de espera tras un stop.
+# señal en el MISMO símbolo y MISMA dirección.
 COOLDOWN_CANDLES = 2
 
-# ADX mínimo para permitir que una señal se confirme. Investigación estándar
-# de trading algorítmico: por debajo de 20, el mercado está lateral/sin
-# tendencia clara y los indicadores de momentum (MACD) dan señales falsas
-# ("whipsaws") con más frecuencia. Antes esto solo se mostraba como aviso;
-# ahora bloquea la confirmación -- el ADX actúa como "portero", no como
-# un dato más que suma puntos.
+# ADX mínimo para permitir que una señal se confirme.
 MIN_ADX_FOR_SIGNAL = 20
 
 # Modo reversión a la media: disponible para BACKTEST siempre, pero
-# pausado para uso en vivo (sin botón de aceptar) hasta que muestre
-# resultados razonables. Los primeros backtests dieron 9/9 operaciones
-# perdedoras (BTC, SOL, DOGE) incluso después de ampliar el stop -- señal
-# de que el problema es el punto de entrada (se compra al cierre de la
-# vela de rechazo, ya después del rebote inmediato), no solo la distancia
-# del stop. Cambiar a True solo cuando el backtest muestre ventaja real.
-ENABLE_MEAN_REVERSION_LIVE = False
-
-# Modo reversión a la media: disponible para BACKTEST siempre, pero
-# pausado para uso en vivo (sin botón de aceptar) hasta que muestre
-# resultados razonables. Los primeros backtests dieron 9/9 operaciones
-# perdedoras (BTC, SOL, DOGE) incluso después de ampliar el stop -- señal
-# de que el problema es el punto de entrada (se compra al cierre de la
-# vela de rechazo, ya después del rebote inmediato), no solo la distancia
-# del stop. Cambiar a True solo cuando el backtest muestre ventaja real.
+# pausado para uso en vivo hasta que muestre resultados razonables.
 ENABLE_MEAN_REVERSION_LIVE = False
 
 # --- Gestión de riesgo ---
-# Distancia máxima permitida para el stop loss, como % del precio de entrada.
-#
-# IMPORTANTE: esto es una RED DE SEGURIDAD EXTREMA, no el control principal
-# de riesgo. El control principal es el "Riesgo por operación (%)" de la
-# calculadora, que ajusta cuánto DINERO inviertes según qué tan lejos esté
-# el stop -- eso ya limita tu pérdida en dólares sin importar el % de precio.
-#
-# Antes este valor estaba en 4%, forzando el mismo stop apretado para BTC
-# (lento) y para altcoins volátiles (POL, NEAR). El backtest mostró que
-# eso perjudicaba a BTC: sacaba operaciones por ruido normal antes de que
-# el movimiento se desarrollara (profit factor cayó de 1.58 a 0.99). Con
-# el position sizing por riesgo ya activo, un stop más lejano solo reduce
-# el monto invertido -- no hace falta forzarlo a estar cerca.
 MAX_STOP_PCT = 0.10
-
-# Ratio riesgo/beneficio mínimo aceptable. Si después de aplicar el tope
-# de arriba el TP queda muy cerca comparado con el riesgo, la señal se
-# marca como de baja calidad en vez de "confirmada" sin más.
 MIN_RR_RATIO = 1.0
 
 # Cada cuánto se refresca el dashboard (segundos)
@@ -117,7 +86,5 @@ TELEGRAM_TOKEN = _get_secret("TELEGRAM_TOKEN", os.getenv("TELEGRAM_TOKEN", ""))
 TELEGRAM_CHAT_ID = _get_secret("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", ""))
 
 # --- Turso (base de datos persistente, opcional) ---
-# Si se dejan vacíos, db.py usa un archivo SQLite local automáticamente.
-# Ver instrucciones de configuración al inicio de db.py.
 TURSO_DATABASE_URL = _get_secret("TURSO_DATABASE_URL", os.getenv("TURSO_DATABASE_URL", ""))
 TURSO_AUTH_TOKEN = _get_secret("TURSO_AUTH_TOKEN", os.getenv("TURSO_AUTH_TOKEN", ""))

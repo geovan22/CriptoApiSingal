@@ -12,7 +12,9 @@ from signal_service import get_mean_reversion_signal
 from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
 
 
-def _next_candle_close(interval_hours: int = 4) -> pd.Timestamp:
+def _next_candle_close(interval_hours: float = None) -> pd.Timestamp:
+    if interval_hours is None:
+        interval_hours = config.get_interval_hours()
     now = pd.Timestamp.now(tz="UTC")
     boundary_hour = ((now.hour // interval_hours) + 1) * interval_hours
     if boundary_hour >= 24:

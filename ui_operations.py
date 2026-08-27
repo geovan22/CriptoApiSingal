@@ -22,7 +22,9 @@ STRATEGY_LABELS = {
 }
 
 
-def _next_candle_close(interval_hours: int = 4) -> pd.Timestamp:
+def _next_candle_close(interval_hours: float = None) -> pd.Timestamp:
+    if interval_hours is None:
+        interval_hours = config.get_interval_hours()
     now = pd.Timestamp.now(tz="UTC")
     boundary_hour = ((now.hour // interval_hours) + 1) * interval_hours
     if boundary_hour >= 24:
@@ -92,11 +94,13 @@ def render_operations_panel(open_ops: list):
                 m4.metric("Precio actual", format_price(live))
 
                 if op.get("investment_amount"):
+                    leverage = (op["investment_amount"] / op["capital_at_entry"]) if op.get("capital_at_entry") else None
+                    leverage_str = f" · Apalancamiento: {leverage:.1f}x" if leverage else ""
                     st.caption(
                         f"Monto invertido: ${op['investment_amount']:.2f} · "
                         f"Riesgo usado: {op.get('risk_pct_used', '—')}% · "
                         f"Capital al entrar: ${op.get('capital_at_entry', '—')} · "
-                        f"Cantidad: {op.get('quantity', 0):.6f}"
+                        f"Cantidad: {op.get('quantity', 0):.6f}{leverage_str}"
                     )
                 st.progress(progress, text=f"{progress*100:.0f}% hacia el take profit")
 

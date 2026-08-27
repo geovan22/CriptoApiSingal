@@ -59,8 +59,16 @@ def init_db(default_symbols=None):
         if default_symbols:
             existing = c.execute("SELECT COUNT(*) AS n FROM favorites").rows[0][0]
             if existing == 0:
-                for s in default_symbols:
-                    c.execute("INSERT OR IGNORE INTO favorites (symbol) VALUES (?)", [s])
+                # Antes se sembraban TODOS los símbolos disponibles como
+                # favoritos por defecto (hasta 27) -- eso significaba que
+                # cada refresco tenía que calcular la señal completa de
+                # los 27 para la watchlist, haciendo la carga mucho más
+                # lenta. Ahora se siembra solo un par curado; el usuario
+                # agrega los suyos desde el panel de Favoritos.
+                curated_defaults = ["BTCUSDT", "ETHUSDT"]
+                for s in curated_defaults:
+                    if s in default_symbols:
+                        c.execute("INSERT OR IGNORE INTO favorites (symbol) VALUES (?)", [s])
 
         for stmt in [
             "ALTER TABLE operations ADD COLUMN initial_stop REAL",
