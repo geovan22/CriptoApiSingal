@@ -77,6 +77,26 @@ def compute_trade_metrics(op: dict) -> dict:
         return empty
 
 
+def compute_real_balance(closed_ops: list, initial_capital: float) -> tuple:
+    """
+    Saldo real = capital inicial + suma de TODO el PnL en $ ya realizado
+    (operaciones cerradas). A diferencia de 'capital_at_entry' (que es
+    una foto del capital que tenías al abrir CADA operación, para el
+    position sizing), esto es un balance que de verdad acumula ganancias
+    y pérdidas reales a lo largo del tiempo.
+
+    Devuelve (saldo_real, pnl_total_usd). Si alguna operación no tiene
+    datos completos (cantidad guardada), simplemente no se suma su PnL --
+    no rompe el cálculo, solo lo deja incompleto para esas operaciones viejas.
+    """
+    total_pnl_usd = 0.0
+    for op in closed_ops:
+        m = compute_trade_metrics(op)
+        if m["pnl_usd"] is not None:
+            total_pnl_usd += m["pnl_usd"]
+    return round(initial_capital + total_pnl_usd, 2), round(total_pnl_usd, 2)
+
+
 def build_report(closed_ops: list, open_ops: list) -> dict:
     """
     Reporte completo de desempeño real: métricas en R sobre las cerradas,

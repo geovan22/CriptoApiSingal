@@ -7,6 +7,7 @@ import streamlit as st
 import config
 import db
 import performance
+import account_settings
 from app_state import init_session_state, setup_autorefresh, set_symbol
 from signal_service import get_data_and_signal
 from telegram_handler import process_telegram_commands
@@ -50,13 +51,46 @@ init_session_state()
 
 config.INTERVAL = db.get_state("selected_interval", config.INTERVAL)
 
-top_col1, top_col2 = st.columns([3, 1])
+top_col1, top_col2, top_col3 = st.columns([2.5, 1, 1])
 with top_col2:
     st.session_state.refresh_paused = st.checkbox(
         "⏸️ Pausar refresco",
         value=st.session_state.refresh_paused,
         help="Pausa el refresco automático en toda la app -- útil para backtests largos o para leer el historial sin que se recargue solo.",
     )
+with top_col3:
+    new_notif_value = st.checkbox(
+        "🔔 Telegram",
+        value=st.session_state.notifications_enabled,
+        help="Activa o pausa las alertas de Telegram sin salir de la app -- igual que /start y /stop, pero desde aquí. Se recuerda la próxima vez que abras la app.",
+    )
+    if new_notif_value != st.session_state.notifications_enabled:
+        st.session_state.notifications_enabled = new_notif_value
+        db.set_state("notifications_enabled", "1" if new_notif_value else "0")
+
+with st.expander("⚙️ Cuenta (capital, saldo real, apalancamiento)"):
+    closed_ops_for_balance = db.get_operation_history(500)
+    saved_capital, saved_calc_mode, saved_leverage = account_settings.get_settings()
+    saldo_real, pnl_total_realizado = performance.compute_real_balance(closed_ops_for_balance, saved_capital)
+
+    ac1, ac2, ac3 = st.columns(3)
+    ac1.metric("Capital inicial", f"${saved_capital:.2f}")
+    ac2.metric("Saldo real actual", f"${saldo_real:.2f}", f"{pnl_total_realizado:+.2f}")
+    ac3.metric("Modo de cálculo", "Riesgo %" if saved_calc_mode == "risk_pct" else "Apalancamiento fijo")
+
+    with st.form("account_settings_form"):
+        new_capital = st.number_input("Capital inicial ($)", min_value=1.0, value=saved_capital, step=10.0,
+                                        help="Se usa para calcular tu saldo real (capital inicial + ganancias/pérdidas ya cerradas).")
+        new_mode = st.radio(
+            "Modo de cálculo por defecto en la calculadora", ["risk_pct", "leverage"],
+            format_func=lambda m: "Riesgo % (recomendado)" if m == "risk_pct" else "Apalancamiento fijo",
+            index=0 if saved_calc_mode == "risk_pct" else 1, horizontal=True,
+        )
+        new_leverage = st.number_input("Apalancamiento por defecto (si eliges ese modo)", min_value=1.0, max_value=50.0, value=saved_leverage, step=0.5)
+        if st.form_submit_button("💾 Guardar configuración de cuenta"):
+            account_settings.set_settings(new_capital, new_mode, new_leverage)
+            st.success("Configuración guardada.")
+            st.rerun()
 
 open_ops = db.get_open_operations()
 refresh_ms = setup_autorefresh(len(open_ops))
