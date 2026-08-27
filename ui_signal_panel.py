@@ -7,6 +7,8 @@ import config
 import db
 import risk_rules
 import trading_hours
+import account_settings
+import performance
 from price_format import format_price
 from signal_service import get_mean_reversion_signal
 from telegram_handler import send_signal_alert, TOKEN, CHAT_ID
@@ -52,7 +54,6 @@ def _render_signal_metrics(result: dict):
     if result["status"] == "filtrada_rr":
         st.caption(f"⛔ Cumplió el puntaje de confluencia, pero el ratio riesgo/beneficio ({result['rr_ratio']}:1) está por debajo del mínimo ({config.MIN_RR_RATIO}:1). No se ofrece como operable.")
 
-    # Cuadrícula compacta: 4 métricas por fila en vez de una línea por dato
     g1, g2, g3, g4 = st.columns(4)
     g1.metric("RSI 14", result["rsi"], result["rsi_zone"])
     g2.metric("ADX", result["adx"], result["trend_strength"])
@@ -139,21 +140,41 @@ def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str) -
     entry, stop, tp = result["entry"], result["stop"], result["tp"]
     stop_distance_pct = abs(entry - stop) / entry if entry else 0
 
-    cap_col, risk_col = st.columns(2)
+    saved_capital, saved_calc_mode, saved_leverage = account_settings.get_settings()
+    closed_ops = db.get_operation_history(500)
+    real_balance, _ = performance.compute_real_balance(closed_ops, saved_capital)
+
+    cap_col, mode_col = st.columns(2)
     with cap_col:
-        capital = st.number_input("Capital disponible ($)", min_value=1.0, value=50.0, step=10.0, key="capital_input")
-    with risk_col:
+        capital = st.number_input(
+            "Capital disponible ($)", min_value=1.0, value=real_balance, step=10.0, key="capital_input",
+            help="Por defecto es tu saldo real (capital inicial + ganancias/pérdidas ya cerradas) -- configúralo en '⚙️ Cuenta' arriba.",
+        )
+    with mode_col:
+        calc_mode = st.radio(
+            "Modo de cálculo", ["risk_pct", "leverage"],
+            format_func=lambda m: "Riesgo %" if m == "risk_pct" else "Apalancamiento fijo",
+            index=0 if saved_calc_mode == "risk_pct" else 1, horizontal=True, key=f"calc_mode_{alert_key}",
+        )
+
+    if calc_mode == "risk_pct":
         risk_pct = st.number_input(
             "Riesgo por operación (%)", min_value=0.1, max_value=100.0, value=2.0, step=0.5,
             key="risk_pct_input",
             help="% de tu capital que estás dispuesto a perder si toca el stop. 1-2% es lo recomendado en gestión de riesgo profesional.",
         )
-
-    suggested_investment = (capital * risk_pct / 100) / stop_distance_pct if stop_distance_pct > 0 else capital
-    suggested_investment = round(suggested_investment, 2)
-    max_loss_if_default = capital * risk_pct / 100
-
-    st.metric("💡 Monto recomendado", f"${suggested_investment:.2f}", help=f"Para arriesgar {risk_pct:.1f}% de tu capital (${max_loss_if_default:.2f}) según la distancia real de este stop ({stop_distance_pct*100:.2f}%).")
+        suggested_investment = (capital * risk_pct / 100) / stop_distance_pct if stop_distance_pct > 0 else capital
+        suggested_investment = round(suggested_investment, 2)
+        max_loss_if_default = capital * risk_pct / 100
+        st.metric("💡 Monto recomendado", f"${suggested_investment:.2f}", help=f"Para arriesgar {risk_pct:.1f}% de tu capital (${max_loss_if_default:.2f}) según la distancia real de este stop ({stop_distance_pct*100:.2f}%).")
+    else:
+        leverage_chosen = st.number_input("Apalancamiento deseado", min_value=1.0, max_value=50.0, value=saved_leverage, step=0.5, key="leverage_input")
+        suggested_investment = round(capital * leverage_chosen, 2)
+        implied_risk_pct = (suggested_investment * stop_distance_pct / capital * 100) if capital else 0
+        risk_pct = implied_risk_pct
+        st.metric("💡 Monto según apalancamiento", f"${suggested_investment:.2f}", help=f"Capital × {leverage_chosen:.1f}x. Esto implica arriesgar ~{implied_risk_pct:.1f}% de tu capital si toca el stop.")
+        if implied_risk_pct > 5:
+            st.warning(f"⚠️ Con {leverage_chosen:.1f}x y este stop, arriesgarías ~{implied_risk_pct:.1f}% de tu capital -- bastante por encima del 1-2% recomendado.")
 
     use_custom = st.checkbox("✏️ Usar un monto distinto al recomendado", key=f"custom_toggle_{alert_key}")
     if use_custom:
@@ -163,7 +184,7 @@ def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str) -
         )
     else:
         investment = suggested_investment
-        st.caption(f"Se usará el monto recomendado: ${investment:.2f}")
+        st.caption(f"Se usará el monto: ${investment:.2f}")
 
     qty = investment / entry
 

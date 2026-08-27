@@ -45,10 +45,12 @@ def process_telegram_commands():
 
         if cmd == "start":
             st.session_state.notifications_enabled = True
+            db.set_state("notifications_enabled", "1")
             send_telegram_message(TOKEN, CHAT_ID, "🟢 Alertas activadas.")
 
         elif cmd == "stop":
             st.session_state.notifications_enabled = False
+            db.set_state("notifications_enabled", "0")
             send_telegram_message(TOKEN, CHAT_ID, "🔴 Alertas pausadas. El dashboard sigue vigilando el mercado, pero no te va a interrumpir.")
 
         elif cmd == "help":

@@ -14,7 +14,7 @@ def init_session_state():
     if "symbol" not in st.session_state:
         st.session_state.symbol = db.get_state("last_symbol", config.DEFAULT_SYMBOL)
     if "notifications_enabled" not in st.session_state:
-        st.session_state.notifications_enabled = True
+        st.session_state.notifications_enabled = db.get_state("notifications_enabled", "1") == "1"
     if "telegram_offset" not in st.session_state:
         st.session_state.telegram_offset = 0
     if "last_alert" not in st.session_state:
