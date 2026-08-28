@@ -67,6 +67,7 @@ def init_db(default_symbols=None):
             "ALTER TABLE operations ADD COLUMN mfe_price REAL",
             "ALTER TABLE operations ADD COLUMN mae_price REAL",
             "ALTER TABLE operations ADD COLUMN strategy TEXT DEFAULT 'trend'",
+            "ALTER TABLE operations ADD COLUMN close_note TEXT",
         ]:
             try:
                 c.execute(stmt)
@@ -157,7 +158,7 @@ def get_operation_history(limit: int = 20) -> list:
         return _rows_as_dicts(rs)
 
 
-def close_operation(op_id: int, close_price: float, outcome: str, close_reason: str = None):
+def close_operation(op_id: int, close_price: float, outcome: str, close_reason: str = None, close_note: str = None):
     with _get_client() as c:
         rs = c.execute("SELECT * FROM operations WHERE id = ?", [op_id])
         rows = _rows_as_dicts(rs)
@@ -169,8 +170,8 @@ def close_operation(op_id: int, close_price: float, outcome: str, close_reason: 
         else:
             pnl_pct = (op["entry"] - close_price) / op["entry"] * 100
         c.execute(
-            "UPDATE operations SET status='closed', closed_at=?, outcome=?, close_price=?, pnl_pct=?, close_reason=? WHERE id=?",
-            [datetime.now(timezone.utc).isoformat(), outcome, close_price, pnl_pct, close_reason or outcome, op_id],
+            "UPDATE operations SET status='closed', closed_at=?, outcome=?, close_price=?, pnl_pct=?, close_reason=?, close_note=? WHERE id=?",
+            [datetime.now(timezone.utc).isoformat(), outcome, close_price, pnl_pct, close_reason or outcome, close_note, op_id],
         )
 
 

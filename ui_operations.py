@@ -127,9 +127,23 @@ def render_operations_panel(open_ops: list):
                         st.success("Datos actualizados.")
                         st.rerun()
 
+                # Aviso basado en un patron real que encontramos en tus datos:
+                # cerrar en perdida SIN que el stop se haya tocado a veces
+                # corta ganadoras a medio camino (caso SOL: -1.30% manual,
+                # habria llegado a +4.90% de TP). Solo informa, no bloquea.
+                current_pnl_pct = ((live - op["entry"]) / op["entry"] * 100) if op["direction"] == "COMPRA" else ((op["entry"] - live) / op["entry"] * 100)
+                stop_not_hit = not (
+                    (op["direction"] == "COMPRA" and live <= op["stop"]) or
+                    (op["direction"] == "VENTA" and live >= op["stop"])
+                )
+                if current_pnl_pct < 0 and stop_not_hit:
+                    st.caption(f"💭 Esta operación está en {current_pnl_pct:+.2f}% pero tu stop NO se ha tocado todavía -- sigue teniendo margen para recuperarse.")
+
+                close_note = st.text_input("Motivo del cierre (opcional, para tu propio análisis después)", key=f"note_{op['id']}", placeholder="ej. tomé ganancia rápido, vi noticia, cambié de opinión...")
+
                 if st.button("🏁 Finalizar", key=f"finish_{op['id']}"):
                     reason = "manual_tras_alerta" if op.get("early_warning_sent") else "manual"
-                    db.close_operation(op["id"], live, "manual", close_reason=reason)
+                    db.close_operation(op["id"], live, "manual", close_reason=reason, close_note=close_note or None)
                     st.success(f"{op['symbol']} finalizada manualmente en ${format_price(live)}.")
                     st.rerun()
 
@@ -161,3 +175,5 @@ def render_operations_panel(open_ops: list):
                         unsafe_allow_html=True,
                     )
                     st.caption(f"{reason_label} · {h['pnl_pct']:+.2f}%")
+                    if h.get("close_note"):
+                        st.caption(f"📝 {h['close_note']}")
