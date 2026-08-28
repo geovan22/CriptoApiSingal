@@ -123,16 +123,47 @@ def _render_accept_operation_button(symbol: str, signal: str, result: dict, open
         st.warning(cooldown_msg)
         return
 
-    if st.button("✅ Aceptar y dar seguimiento a esta operación"):
-        db.create_operation(
-            symbol, signal, result["entry"], result["stop"], result["tp"],
-            investment_amount=calc.get("investment"),
-            risk_pct_used=calc.get("risk_pct"),
-            capital_at_entry=calc.get("capital"),
-            quantity=calc.get("qty"),
+    confirm_key = f"confirm_dup_{symbol}_{signal}"
+
+    if st.button("✅ Aceptar y dar seguimiento a esta operación", key=f"accept_btn_{symbol}_{signal}"):
+        duplicate = db.find_recent_similar_operation(symbol, signal, result["entry"], result["stop"])
+        if duplicate:
+            st.session_state[confirm_key] = True
+            st.rerun()
+        else:
+            db.create_operation(
+                symbol, signal, result["entry"], result["stop"], result["tp"],
+                investment_amount=calc.get("investment"),
+                risk_pct_used=calc.get("risk_pct"),
+                capital_at_entry=calc.get("capital"),
+                quantity=calc.get("qty"),
+            )
+            st.success("Operación en seguimiento (con el monto, riesgo y cantidad de la calculadora ya guardados). Se revisa automáticamente cada refresco.")
+            st.rerun()
+
+    if st.session_state.get(confirm_key):
+        st.warning(
+            f"⚠️ Ya abriste una operación casi idéntica de {symbol} hace menos de 2 minutos "
+            f"(entrada y stop prácticamente iguales) -- ¿fue un doble clic accidental, o de verdad "
+            f"quieres agregar otra posición igual?"
         )
-        st.success("Operación en seguimiento (con el monto, riesgo y cantidad de la calculadora ya guardados). Se revisa automáticamente cada refresco.")
-        st.rerun()
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            if st.button("Sí, agregar de todas formas", key=f"confirm_yes_{symbol}_{signal}"):
+                db.create_operation(
+                    symbol, signal, result["entry"], result["stop"], result["tp"],
+                    investment_amount=calc.get("investment"),
+                    risk_pct_used=calc.get("risk_pct"),
+                    capital_at_entry=calc.get("capital"),
+                    quantity=calc.get("qty"),
+                )
+                st.session_state[confirm_key] = False
+                st.success("Operación en seguimiento.")
+                st.rerun()
+        with dc2:
+            if st.button("No, cancelar", key=f"confirm_no_{symbol}_{signal}"):
+                st.session_state[confirm_key] = False
+                st.rerun()
 
 
 def _render_calculator(symbol: str, signal: str, result: dict, alert_key: str) -> dict:

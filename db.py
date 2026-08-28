@@ -1,13 +1,5 @@
 """
 Base de datos para favoritos, estado de la app, y operaciones en seguimiento.
-
-Dos modos, sin cambiar nada del resto del código:
-
-1. LOCAL (por defecto, sin configurar nada): guarda en un archivo
-   crypto_dashboard.db dentro del propio contenedor/teléfono.
-
-2. TURSO (recomendado para producción, gratis): configura
-   TURSO_DATABASE_URL y TURSO_AUTH_TOKEN.
 """
 import json
 from datetime import datetime, timezone
@@ -59,12 +51,6 @@ def init_db(default_symbols=None):
         if default_symbols:
             existing = c.execute("SELECT COUNT(*) AS n FROM favorites").rows[0][0]
             if existing == 0:
-                # Antes se sembraban TODOS los símbolos disponibles como
-                # favoritos por defecto (hasta 27) -- eso significaba que
-                # cada refresco tenía que calcular la señal completa de
-                # los 27 para la watchlist, haciendo la carga mucho más
-                # lenta. Ahora se siembra solo un par curado; el usuario
-                # agrega los suyos desde el panel de Favoritos.
                 curated_defaults = ["BTCUSDT", "ETHUSDT"]
                 for s in curated_defaults:
                     if s in default_symbols:
@@ -117,6 +103,29 @@ def set_state(key: str, value: str):
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [key, value],
         )
+
+
+def find_recent_similar_operation(symbol: str, direction: str, entry: float, stop: float, window_seconds: int = 120):
+    """
+    Busca una operación abierta en los últimos `window_seconds` con el
+    mismo símbolo, dirección, y entrada/stop casi idénticos (±0.05%) --
+    señal típica de un doble clic accidental en 'Aceptar', no de una
+    decisión real de agregar otra posición igual. Devuelve la operación
+    encontrada o None.
+    """
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat()
+    with _get_client() as c:
+        rs = c.execute(
+            "SELECT * FROM operations WHERE symbol = ? AND direction = ? AND opened_at >= ? ORDER BY opened_at DESC",
+            [symbol, direction, cutoff],
+        )
+        for op in _rows_as_dicts(rs):
+            entry_close = abs(op["entry"] - entry) / entry < 0.0005 if entry else False
+            stop_close = abs(op["stop"] - stop) / stop < 0.0005 if stop else False
+            if entry_close and stop_close:
+                return op
+    return None
 
 
 def create_operation(symbol, direction, entry, stop, tp, investment_amount=None,
@@ -180,12 +189,6 @@ def apply_breakeven(op_id: int, new_stop: float):
 
 def update_operation_investment(op_id: int, investment_amount: float, risk_pct_used: float,
                                  capital_at_entry: float, quantity: float):
-    """
-    Permite corregir el monto invertido, % de riesgo, capital y cantidad
-    de una operación YA creada (abierta o cerrada) -- útil si se aceptó
-    con el monto recomendado por error, o para dejar el registro fiel
-    a lo que realmente se invirtió, de cara al análisis posterior.
-    """
     with _get_client() as c:
         c.execute(
             "UPDATE operations SET investment_amount=?, risk_pct_used=?, capital_at_entry=?, quantity=? WHERE id=?",
