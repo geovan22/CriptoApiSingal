@@ -1,6 +1,4 @@
-"""Panel de respaldo, restauración, historial, y desempeño real -- organizado
-en pestañas internas (Desempeño / Respaldo / Cierres manuales / Historial)
-para no forzar scroll por 4 secciones largas apiladas."""
+"""Panel de respaldo, restauración, historial, y desempeño real (vive dentro de una pestaña)."""
 import io
 import csv
 import streamlit as st
@@ -12,6 +10,7 @@ import post_close_review
 
 
 def _render_performance_report():
+    st.markdown("### 📈 Desempeño real (dinero de verdad, no backtest)")
     st.caption(
         "Medido en 'R' (múltiplos de lo que planeabas arriesgar), como hacen los traders "
         "profesionales -- permite comparar operaciones de distinto tamaño y símbolo en una "
@@ -41,9 +40,9 @@ def _render_performance_report():
                 dc3.metric("Tasa de captura", f"{report['avg_capture_rate']*100:.0f}%", help="Qué % del mejor movimiento posible (MFE) terminaste capturando realmente.")
 
             if report["avg_mfe_r"] > 0 and report["avg_capture_rate"] is not None and report["avg_capture_rate"] < 0.5:
-                st.info("💡 Tu tasa de captura es baja -- el precio suele llegar más lejos a tu favor de lo que terminas ganando.")
+                st.info("💡 Tu tasa de captura es baja -- el precio suele llegar más lejos a tu favor de lo que terminas ganando. Podría valer la pena un take profit más ambicioso o un trailing stop, una vez tengas más operaciones para confirmarlo.")
             if report["avg_mae_r"] > 0.8:
-                st.info("💡 El precio suele acercarse mucho a tu stop antes de recuperarse (MAE alto).")
+                st.info("💡 El precio suele acercarse mucho a tu stop antes de recuperarse (MAE alto) -- si esto se repite con más datos, podría indicar que el stop está algo apretado para la volatilidad real.")
 
         if report["equity_curve"]:
             with st.expander("Ver curva de equity (PnL acumulado en $)"):
@@ -56,6 +55,14 @@ def _render_performance_report():
                 fig.update_layout(height=250, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
+        by_symbol = performance.build_report_by_symbol(closed_ops)
+        if by_symbol:
+            with st.expander(f"Ver desglose por símbolo ({len(by_symbol)})"):
+                st.caption("¿Qué símbolos te están funcionando de verdad, con dinero real?")
+                for sym, s in sorted(by_symbol.items(), key=lambda kv: kv[1]["total_pnl_usd"], reverse=True):
+                    emoji = "🟢" if s["total_pnl_usd"] > 0 else "🔴"
+                    st.write(f"{emoji} **{sym}**: {s['n_trades']} op. · win rate {s['win_rate_pct']}% · R prom {s['avg_r']:+.2f} · ${s['total_pnl_usd']:+.2f}")
+
     if report["open_count"] > 0:
         st.markdown("**Exposición actual (operaciones abiertas)**")
         ec1, ec2 = st.columns(2)
@@ -63,12 +70,14 @@ def _render_performance_report():
         ec2.metric("Riesgo total en juego", f"${report['total_risk_usd_open']:.2f}")
         if report["total_risk_usd_open"] > 0:
             st.caption(
-                "Suma del riesgo planeado de TODAS tus operaciones abiertas a la vez. "
-                "Si supera ~6-10% de tu capital total, estás arriesgando más de lo recomendado en conjunto."
+                "Suma del riesgo planeado (capital × % de riesgo) de TODAS tus operaciones abiertas a la vez. "
+                "Si esta suma supera ~6-10% de tu capital total, estás arriesgando más de lo recomendado en conjunto, "
+                "aunque cada operación individual se vea conservadora."
             )
 
 
 def _operations_to_csv() -> str:
+    """Junta operaciones abiertas + cerradas en un CSV listo para Excel/Sheets."""
     all_ops = db.get_open_operations() + db.get_operation_history(1000)
     if not all_ops:
         return ""
@@ -97,8 +106,9 @@ def render_backup_panel():
         st.caption(f"Modo de base de datos: **{db_mode}**")
         if not config.TURSO_DATABASE_URL:
             st.caption(
-                "El disco de Streamlit Cloud puede reiniciarse. Descarga un respaldo de vez en cuando, "
-                "o configura Turso (gratis) para que sea permanente."
+                "El disco de Streamlit Cloud puede reiniciarse. Descarga un respaldo de vez en cuando "
+                "para no perder tus favoritos ni tu historial de operaciones, o configura Turso "
+                "(gratis) para que sea permanente -- ver instrucciones al inicio de db.py."
             )
         st.download_button("Descargar respaldo (JSON)", db.export_backup(), file_name="crypto_dashboard_backup.json")
         csv_data = _operations_to_csv()
@@ -115,8 +125,9 @@ def render_backup_panel():
 
     with tab3:
         st.caption(
-            "Para cada operación que cerraste tú mismo, simula qué habría pasado si la hubieras "
-            "dejado correr -- para saber si tus cierres manuales están ayudando o quitándole ganancia al sistema."
+            "Para cada operación que cerraste tú mismo (no por TP/stop automático), simula qué "
+            "habría pasado si la hubieras dejado correr -- para saber si tus cierres manuales están "
+            "ayudando o quitándole ganancia al sistema."
         )
         if st.button("🔬 Analizar mis cierres manuales"):
             with st.spinner("Simulando qué hubiera pasado..."):

@@ -97,6 +97,37 @@ def compute_real_balance(closed_ops: list, initial_capital: float) -> tuple:
     return round(initial_capital + total_pnl_usd, 2), round(total_pnl_usd, 2)
 
 
+def build_report_by_symbol(closed_ops: list) -> dict:
+    """
+    Igual que el desglose por símbolo que ya tienes en el backtest, pero
+    con operaciones REALES. Responde: ¿qué símbolos te están funcionando
+    de verdad, con dinero real, y cuáles no? Agrupa por símbolo y calcula
+    win rate, R promedio, y PnL en $ de cada uno.
+    """
+    by_symbol = {}
+    for op in closed_ops:
+        by_symbol.setdefault(op["symbol"], []).append(op)
+
+    result = {}
+    for symbol, ops in by_symbol.items():
+        with_r = []
+        for op in ops:
+            m = compute_trade_metrics(op)
+            if m["r_final"] is not None:
+                with_r.append({**op, **m})
+        n = len(with_r)
+        if n == 0:
+            continue
+        wins = [t for t in with_r if t["r_final"] > 0]
+        result[symbol] = {
+            "n_trades": n,
+            "win_rate_pct": round(len(wins) / n * 100, 1),
+            "avg_r": round(sum(t["r_final"] for t in with_r) / n, 2),
+            "total_pnl_usd": round(sum(t["pnl_usd"] for t in with_r if t["pnl_usd"] is not None), 2),
+        }
+    return result
+
+
 def build_report(closed_ops: list, open_ops: list) -> dict:
     """
     Reporte completo de desempeño real: métricas en R sobre las cerradas,
